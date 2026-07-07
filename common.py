@@ -72,12 +72,20 @@ def _ma_signal(df):
     return (0.3 if gap_now > 0 else -0.3), "이평 정배열/역배열 유지"
 
 
-def _rsi_signal(df):
+def _rsi_signal(df, trend_up: bool, trend_down: bool):
     v = df["rsi"].iloc[-1]
+    prev = df["rsi"].iloc[-2]
+    rising = v > prev
     if v < 30:
-        return 1.0, f"RSI 과매도({v:.0f})"
-    if v > 70:
-        return -1.0, f"RSI 과매수({v:.0f})"
+        return 1.0, f"RSI 과매도({v:.0f}) - 반등 구간"
+    if v >= 85:
+        return -1.0, f"RSI 극단 과열({v:.0f})"
+    if trend_up and 45 < v < 85 and rising:
+        return 0.5, f"RSI 상승 모멘텀({v:.0f})"
+    if trend_down and 15 < v < 55 and not rising:
+        return -0.5, f"RSI 하락 모멘텀({v:.0f})"
+    if v > 70 and trend_down:
+        return -1.0, f"하락추세 중 RSI 과매수({v:.0f}) - 반락 주의"
     return 0.0, f"RSI 중립({v:.0f})"
 
 
@@ -90,14 +98,19 @@ def _macd_signal(df):
     return (0.3 if last["macd_hist"] > 0 else -0.3), "MACD 추세 유지"
 
 
-def _bb_signal(df):
+def _bb_signal(df, trend_up: bool, trend_down: bool, vol_ratio: float):
     v = df["bb_pctb"].iloc[-1]
     if pd.isna(v):
         return 0.0, "데이터 부족"
-    if v <= 0.05:
-        return 1.0, "볼린저 하단 근접/이탈"
+    strong_vol = (not pd.isna(vol_ratio)) and vol_ratio >= 1.5
     if v >= 0.95:
-        return -1.0, "볼린저 상단 근접/이탈"
+        if trend_up and strong_vol:
+            return 0.5, "상승추세 + 대량거래 밴드 상단 돌파 (강세 지속)"
+        return -1.0, "볼린저 상단 근접/이탈 - 과열 주의"
+    if v <= 0.05:
+        if trend_down and strong_vol:
+            return -0.5, "하락추세 + 대량거래 밴드 하단 이탈 (약세 지속)"
+        return 1.0, "볼린저 하단 근접/이탈 - 반등 구간"
     return 0.0, "밴드 중앙"
 
 
@@ -131,11 +144,16 @@ def evaluate(df: pd.DataFrame) -> dict:
         return {"verdict": "NEUTRAL", "confidence": 0, "score": 0, "reasons": ["데이터 부족"]}
 
     last = df.iloc[-1]
-    ma_s, ma_msg = _ma_signal(df)
-    rsi_s, rsi_msg = _rsi_signal(df)
-    macd_s, macd_msg = _macd_signal(df)
-    bb_s, bb_msg = _bb_signal(df)
+
+    # 추세/거래량을 먼저 판정해서 각 지표 해석에 맥락으로 전달
+    trend_up = last["close"] > last["ma60"]
+    trend_down = last["close"] < last["ma60"]
     vol_s, vol_msg, vol_ratio = _volume_signal(df)
+
+    ma_s, ma_msg = _ma_signal(df)
+    rsi_s, rsi_msg = _rsi_signal(df, trend_up, trend_down)
+    macd_s, macd_msg = _macd_signal(df)
+    bb_s, bb_msg = _bb_signal(df, trend_up, trend_down, vol_ratio)
 
     signals = [ma_s, rsi_s, macd_s, bb_s]  # 거래량은 '검증' 용도로 별도 처리
     n_pos = sum(1 for s in signals if s > 0)
@@ -143,11 +161,7 @@ def evaluate(df: pd.DataFrame) -> dict:
 
     weighted = ma_s * 1.5 + rsi_s * 1.0 + macd_s * 1.5 + bb_s * 1.0 + vol_s * 0.8
 
-    # 1) 장기추세 필터: MA60 대비 현재가 위치
-    trend_up = last["close"] > last["ma60"]
-    trend_down = last["close"] < last["ma60"]
-
-    # 2) 다중지표 확인: 4개 중 3개 이상 동일 방향이어야 '신호'로 인정
+    # 다중지표 확인: 4개 중 3개 이상 동일 방향이어야 '신호'로 인정
     confluence_buy = n_pos >= 3
     confluence_sell = n_neg >= 3
 

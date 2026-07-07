@@ -1,27 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-realtime_check.py - 장중 5~10분마다 실행 (GitHub Actions cron)
-candidates.json 의 후보 종목들에 대해, '오늘' 하루치 전체시장 스냅샷을
-딱 1번의 API 호출로 받아온 뒤(효율성), 각 후보의 과거 데이터에 이어붙여
-지표를 재계산합니다. 확정 신호(BUY/SELL)가 새로 뜨면 텔레그램으로 알림을
-보내고, 같은 신호를 하루에 중복으로 보내지 않도록 alerted.json 에 기록합니다.
-
-주의: pykrx가 제공하는 당일 데이터는 KRX 공식 집계 기준이라
-     증권사 HTS 대비 몇 분 정도 지연이 있을 수 있습니다.
+realtime_check.py (v2) - 장중 10분마다 실행
+데이터 출처: FinanceDataReader(네이버) - 해외(GitHub) 서버에서도 동작.
+candidates.json 후보(최대 80개)만 오늘 시세를 다시 받아 재평가하고,
+확정 신호가 새로 뜨면 텔레그램 알림. 하루 중복 알림 방지.
 """
 import sys
-from datetime import datetime
+import time
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from pykrx import stock as krx
+import FinanceDataReader as fdr
 
 sys.path.insert(0, ".")
 import common
 
+KST = ZoneInfo("Asia/Seoul")
 CANDIDATES_FILE = "candidates.json"
 ALERTED_FILE = "alerted.json"
-KST = ZoneInfo("Asia/Seoul")
+REQ_SLEEP = 0.05
 
 
 def now_kst() -> datetime:
@@ -30,7 +28,7 @@ def now_kst() -> datetime:
 
 def is_market_hours() -> bool:
     now = now_kst()
-    if now.weekday() >= 5:  # 토,일
+    if now.weekday() >= 5:
         return False
     hm = now.hour * 100 + now.minute
     return 900 <= hm <= 1530
@@ -47,42 +45,43 @@ def main():
         return
 
     today = now_kst().strftime("%Y%m%d")
+    fetch_start = (now_kst() - timedelta(days=10)).strftime("%Y-%m-%d")
+
     alerted = common.load_json(ALERTED_FILE, {})
     if alerted.get("_date") != today:
-        alerted = {"_date": today}  # 날짜 바뀌면 초기화
-
-    print("오늘자 전체시장 스냅샷 조회 중...")
-    try:
-        today_snapshot = krx.get_market_ohlcv_by_ticker(today, market="ALL")
-        today_snapshot = today_snapshot.rename(columns={
-            "시가": "open", "고가": "high", "저가": "low",
-            "종가": "close", "거래량": "volume",
-        })
-    except Exception as e:
-        print(f"스냅샷 조회 실패: {e}")
-        return
-
-    if today_snapshot is None or today_snapshot.empty:
-        print("오늘 데이터가 없습니다 (휴장일이거나 아직 집계 전).")
-        return
+        alerted = {"_date": today}
 
     n_checked, n_alerted = 0, 0
     for c in data["candidates"]:
         code, name = c["code"], c["name"]
-        if code not in today_snapshot.index:
+
+        # 최근 며칠치(오늘 포함)만 새로 조회
+        try:
+            recent = fdr.DataReader(code, fetch_start)
+        except Exception:
+            continue
+        time.sleep(REQ_SLEEP)
+        if recent is None or recent.empty:
+            continue
+
+        recent = recent.rename(columns={
+            "Open": "open", "High": "high", "Low": "low",
+            "Close": "close", "Volume": "volume",
+        })[["open", "high", "low", "close", "volume"]].dropna()
+        recent = recent.reset_index()
+        date_col = recent.columns[0]
+        recent["date"] = pd.to_datetime(recent[date_col]).dt.strftime("%Y%m%d")
+        recent = recent[["date", "open", "high", "low", "close", "volume"]]
+
+        if recent["date"].iloc[-1] != today:
+            # 오늘 데이터가 아직 없음 (개장 직후 등)
             continue
         n_checked += 1
 
         hist = pd.DataFrame(c["history"])
-        row = today_snapshot.loc[code]
-        today_row = pd.DataFrame([{
-            "date": today, "open": float(row["open"]), "high": float(row["high"]),
-            "low": float(row["low"]), "close": float(row["close"]),
-            "volume": float(row["volume"]),
-        }])
-        # 과거 데이터에 오늘자 진행 중인 데이터를 이어붙여 재계산
-        df = pd.concat([hist[hist["date"] != today], today_row], ignore_index=True)
-        df = df.sort_values("date").reset_index(drop=True)
+        # 과거 저장분에서 최근 조회분과 겹치는 날짜 제거 후 병합
+        hist = hist[~hist["date"].isin(set(recent["date"]))]
+        df = pd.concat([hist, recent], ignore_index=True).sort_values("date").reset_index(drop=True)
 
         ind = common.add_indicators(df)
         ev = common.evaluate(ind)
@@ -92,7 +91,7 @@ def main():
 
         key = f"{code}_{ev['verdict']}"
         if key in alerted:
-            continue  # 오늘 이미 같은 방향으로 알림 보냄
+            continue
 
         tp = common.price_targets(ev["close"], ev["atr14"], ev["verdict"])
         msg = common.format_alert(code, name, ev, tp)

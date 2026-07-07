@@ -1,89 +1,92 @@
 # -*- coding: utf-8 -*-
 """
-daily_scan.py - 장 시작 전 1회 실행
-코스피 + 코스닥 전체 종목의 과거 데이터를 모아 지표를 계산하고,
-엄격 기준(추세필터+다중지표확인+거래량검증)을 통과했거나 근접한 종목만
-'후보'로 뽑아서 candidates.json 에 저장합니다.
-(전체 종목을 매번 개별 조회하면 매우 느리므로, '일자별 전체 스냅샷'을
- 과거 ~140 캘린더데이 반복 조회하는 방식으로 효율화했습니다.)
+daily_scan.py (v2) - 장 시작 전 1회 실행
+데이터 출처를 KRX(pykrx) -> 네이버금융(FinanceDataReader)으로 변경.
+(KRX는 해외 IP를 차단해서 GitHub Actions에서 동작하지 않음)
+
+코스피+코스닥 전 종목의 과거 시세를 받아 지표 계산 후,
+엄격 기준을 통과/근접한 종목만 candidates.json 으로 저장.
 """
 import sys
 import time
-import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pandas as pd
-from pykrx import stock as krx
+import FinanceDataReader as fdr
 
 sys.path.insert(0, ".")
 import common
 
 KST = ZoneInfo("Asia/Seoul")
-
-CALENDAR_DAYS_BACK = 160   # 최소 65 거래일 확보용 여유
-CANDIDATE_MAX = 80         # 후보 종목 최대 개수 (실시간 체크 부담 제한)
+CANDIDATE_MAX = 80
 CANDIDATES_FILE = "candidates.json"
+MIN_ROWS = 65          # 지표 계산 최소 거래일
+REQ_SLEEP = 0.03       # 요청 간격 (서버 배려)
 
 
-def collect_full_market_history() -> dict:
-    """지난 CALENDAR_DAYS_BACK일간 코스피+코스닥 전종목 일별 스냅샷을 모아
-    ticker -> DataFrame(OHLCV) 형태로 반환"""
-    end = datetime.now(KST)
-    dates = [(end - timedelta(days=i)).strftime("%Y%m%d") for i in range(CALENDAR_DAYS_BACK)]
-    dates.reverse()
-
-    per_ticker_rows = {}   # code -> list of dict rows
-    name_map = {}
-
-    for d in dates:
-        try:
-            df = krx.get_market_ohlcv_by_ticker(d, market="ALL")
-        except Exception:
-            continue
-        if df is None or df.empty:
-            continue  # 휴장일
-
-        df = df.rename(columns={
-            "시가": "open", "고가": "high", "저가": "low",
-            "종가": "close", "거래량": "volume",
-        })
-        for code, row in df.iterrows():
-            per_ticker_rows.setdefault(code, []).append({
-                "date": d, "open": float(row["open"]), "high": float(row["high"]),
-                "low": float(row["low"]), "close": float(row["close"]),
-                "volume": float(row["volume"]),
-            })
-        time.sleep(0.05)  # 과도한 요청 방지
-
-    return per_ticker_rows
-
-
-def load_ticker_names() -> dict:
-    names = {}
+def get_ticker_list() -> pd.DataFrame:
+    """코스피+코스닥 종목 리스트 (Code, Name)"""
+    frames = []
     for market in ("KOSPI", "KOSDAQ"):
-        for code in krx.get_market_ticker_list(market=market):
-            try:
-                names[code] = krx.get_market_ticker_name(code)
-            except Exception:
-                names[code] = code
-    return names
+        try:
+            df = fdr.StockListing(market)
+            df["Market"] = market
+            frames.append(df)
+        except Exception as e:
+            print(f"  [경고] {market} 리스트 조회 실패: {e}")
+    if not frames:
+        raise RuntimeError("종목 리스트를 가져오지 못했습니다.")
+    alldf = pd.concat(frames, ignore_index=True)
+    # 컬럼명 버전차 대응
+    code_col = "Code" if "Code" in alldf.columns else "Symbol"
+    name_col = "Name" if "Name" in alldf.columns else "name"
+    alldf = alldf[[code_col, name_col]].rename(columns={code_col: "Code", name_col: "Name"})
+    alldf = alldf.dropna(subset=["Code"])
+    alldf["Code"] = alldf["Code"].astype(str).str.zfill(6)
+    # 우선주/스팩 등 이름 필터(간단): 스팩 제외
+    alldf = alldf[~alldf["Name"].astype(str).str.contains("스팩", na=False)]
+    return alldf.drop_duplicates(subset=["Code"]).reset_index(drop=True)
+
+
+def fetch_history(code: str, start: str) -> pd.DataFrame | None:
+    try:
+        df = fdr.DataReader(code, start)
+    except Exception:
+        return None
+    if df is None or df.empty or len(df) < MIN_ROWS:
+        return None
+    df = df.rename(columns={
+        "Open": "open", "High": "high", "Low": "low",
+        "Close": "close", "Volume": "volume",
+    })
+    df = df[["open", "high", "low", "close", "volume"]].dropna()
+    if len(df) < MIN_ROWS:
+        return None
+    df = df.reset_index().rename(columns={df.index.name or "Date": "date", "index": "date"})
+    df["date"] = pd.to_datetime(df["date"]).dt.strftime("%Y%m%d")
+    return df
 
 
 def main():
-    print("[1/3] 전체 시장 과거 데이터 수집 중... (수 분 소요)")
-    history = collect_full_market_history()
-    print(f"  -> {len(history)}개 종목 데이터 확보")
+    now = datetime.now(KST)
+    start = (now - timedelta(days=200)).strftime("%Y-%m-%d")
 
-    print("[2/3] 종목명 매핑 로딩 중...")
-    names = load_ticker_names()
+    print("[1/2] 종목 리스트 조회 중...")
+    tickers = get_ticker_list()
+    print(f"  -> {len(tickers)}개 종목")
 
-    print("[3/3] 지표 계산 및 후보 선정 중...")
+    print("[2/2] 종목별 시세 수집 + 지표 분석 중... (10~30분 소요)")
     candidates = []
-    for code, rows in history.items():
-        if len(rows) < 65:
+    n_ok = 0
+    for i, row in tickers.iterrows():
+        code, name = row["Code"], row["Name"]
+        df = fetch_history(code, start)
+        time.sleep(REQ_SLEEP)
+        if df is None:
             continue
-        df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
+        n_ok += 1
+
         ind = common.add_indicators(df)
         ev = common.evaluate(ind)
 
@@ -94,35 +97,38 @@ def main():
 
         candidates.append({
             "code": code,
-            "name": names.get(code, code),
+            "name": name,
             "verdict": ev["verdict"],
             "score": ev["score"],
             "trend": ev["trend"],
-            # 실시간 체크에서 오늘자 데이터만 이어붙이면 되도록 과거 데이터 보관
-            "history": rows[-100:],
+            "history": df.tail(100).to_dict("records"),
         })
+
+        if (i + 1) % 300 == 0:
+            print(f"  진행: {i+1}/{len(tickers)} (데이터 확보 {n_ok}, 후보 {len(candidates)})")
 
     candidates.sort(key=lambda c: abs(c["score"]), reverse=True)
     candidates = candidates[:CANDIDATE_MAX]
 
     out = {
-        "generated_at": datetime.now(KST).isoformat(),
+        "generated_at": now.isoformat(),
         "count": len(candidates),
         "candidates": candidates,
     }
     common.save_json(CANDIDATES_FILE, out)
 
-    print(f"\n[완료] 후보 {len(candidates)}개 선정 -> {CANDIDATES_FILE}")
     buy_n = sum(1 for c in candidates if c["verdict"] == "BUY")
     sell_n = sum(1 for c in candidates if c["verdict"] == "SELL")
-    print(f"  확정 매수신호: {buy_n}개 / 확정 매도신호: {sell_n}개 / 근접 관찰: {len(candidates)-buy_n-sell_n}개")
+    print(f"\n[완료] 후보 {len(candidates)}개 (확정매수 {buy_n} / 확정매도 {sell_n} / 근접 {len(candidates)-buy_n-sell_n})")
 
-    # 확정 신호는 장 시작 전에도 바로 1회 알림
+    # 확정 신호는 장 시작 전 1회 사전 알림
     for c in candidates:
         if c["verdict"] in ("BUY", "SELL"):
-            df = pd.DataFrame(c["history"]).sort_values("date").reset_index(drop=True)
+            df = pd.DataFrame(c["history"])
             ind = common.add_indicators(df)
             ev = common.evaluate(ind)
+            if ev["verdict"] not in ("BUY", "SELL"):
+                continue
             tp = common.price_targets(ev["close"], ev["atr14"], ev["verdict"])
             msg = "[전일 종가 기준 사전 신호]\n" + common.format_alert(c["code"], c["name"], ev, tp)
             common.send_telegram(msg)
