@@ -21,7 +21,8 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install pykrx pandas numpy requests
+        run: pip install finance-datareader pandas numpy requests
+
 
       - name: Run daily scan
         env:
