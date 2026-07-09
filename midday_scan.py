@@ -76,9 +76,12 @@ def main():
 
         ind = common.add_indicators(df)
         ev = common.evaluate(ind)
-        if ev["verdict"] == "BUY" and ev["confidence"] >= MIN_CONFIDENCE:
-            return (ev["confidence"], c, ev)
-        return None
+        if ev["verdict"] != "BUY" or ev["confidence"] < MIN_CONFIDENCE:
+            return None
+        tp = common.price_targets(ev["close"], ev["atr14"], "BUY")
+        if not common.meets_min_return(tp):
+            return None  # 채권형 ETF 등 변동폭이 미미한 종목 제외
+        return (ev["confidence"], c, ev, tp)
 
     picks = []
     with cf.ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
@@ -92,8 +95,7 @@ def main():
 
     print("[2/2] 뉴스 재수집 + AI 재판단 중...")
     ai_picks = []
-    for conf, c, ev in picks:
-        tp = common.price_targets(ev["close"], ev["atr14"], "BUY")
+    for conf, c, ev, tp in picks:
         news = ai_judge.fetch_news(c["name"])
         ai = ai_judge.ai_analyze(c["code"], c["name"], ev, tp, news)
         if ai is None:
@@ -101,10 +103,19 @@ def main():
             continue
         print(f"  {c['name']}: AI={ai['decision']} (신뢰도 {ai['confidence']}%)")
         if ai["decision"] == "BUY":
+            ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
+            if not common.meets_min_return(ai_tp_check):
+                print(f"    -> AI 목표가가 기대수익 기준 미달로 제외 ({ai['target_price']:,}원)")
+                continue
+            rs = common.rank_score(ai["confidence"], ev["close"], ai["target_price"])
             ai_picks.append({"mode": "ai", "conf": ai["confidence"], "c": c, "ev": ev,
-                              "tp": tp, "ai": ai, "news": news})
+                              "tp": tp, "ai": ai, "news": news, "rank": rs})
 
-    ai_picks.sort(key=lambda x: x["conf"], reverse=True)
+    for p in ai_picks:
+        if p["mode"] == "rule" and "rank" not in p:
+            p["rank"] = common.rank_score(p["ev"]["confidence"] * 100, p["tp"]["entry"], p["tp"]["target"])
+
+    ai_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
     final_picks = ai_picks  # 개수 상한 없음
 
     if not final_picks:
@@ -114,13 +125,13 @@ def main():
         print("\n[완료] 알릴 신호 없음")
         return
 
-    for rank, p in enumerate(final_picks, 1):
+    for rank_no, p in enumerate(final_picks, 1):
         c, ev = p["c"], p["ev"]
         if p["mode"] == "ai":
-            body = ai_judge.format_ai_alert(c["code"], c["name"], ev, p["ai"], p["news"])
+            body = ai_judge.format_ai_alert(c["code"], c["name"], ev, p["ai"], p["news"], p["rank"])
         else:
-            body = common.format_alert(c["code"], c["name"], ev, p["tp"])
-        msg = f"[오후 재점검 {rank}/{len(final_picks)}] (오전장 흐름 반영)\n" + body
+            body = common.format_alert(c["code"], c["name"], ev, p["tp"], p["rank"])
+        msg = f"[오후 재점검 {rank_no}/{len(final_picks)} · 종합점수 {p['rank']['score']}점] (오전장 흐름 반영)\n" + body
         common.send_telegram(msg)
 
     print(f"\n[완료] {len(final_picks)}건 발송")

@@ -79,7 +79,14 @@ def get_ticker_list() -> pd.DataFrame:
 
     alldf = alldf.dropna(subset=["Code"])
     alldf["Code"] = alldf["Code"].astype(str).str.zfill(6)
-    alldf = alldf[~alldf["Name"].astype(str).str.contains("스팩", na=False)]
+    # 스팩, 채권형/머니마켓/인버스/레버리지 등 변동성이 사실상 없거나
+    # 일반적인 상승 매매 전략과 안 맞는 상품은 제외
+    EXCLUDE_KEYWORDS = [
+        "스팩", "채권", "국채", "머니마켓", "MMF", "단기자금",
+        "인버스", "레버리지", "TDF", "타겟데이트", "선물", "합성",
+    ]
+    pattern = "|".join(EXCLUDE_KEYWORDS)
+    alldf = alldf[~alldf["Name"].astype(str).str.contains(pattern, na=False, regex=True)]
     return alldf.drop_duplicates(subset=["Code"]).reset_index(drop=True)
 
 
@@ -165,7 +172,7 @@ def main():
     buy_n = sum(1 for c in candidates if c["verdict"] == "BUY")
     print(f"\n[완료] 후보 {len(candidates)}개 (확정매수 {buy_n} / 근접 {len(candidates)-buy_n})")
 
-    # 1단계: 규칙기반 매수 후보 (신뢰도 70% 이상)
+    # 1단계: 규칙기반 매수 후보 (신뢰도 70% 이상 + 최소 기대수익률 충족)
     MIN_CONFIDENCE = 0.70
     AI_REVIEW_MAX = 25   # AI+뉴스 검토 대상 상한 (API 비용/시간 관리, 기존 15->25로 확대)
     TARGET_N = 10        # 목표 개수(가이드용) - 이보다 많으면 있는 만큼 다 보내고, 적으면 적은 대로 보냄
@@ -176,16 +183,19 @@ def main():
         df = pd.DataFrame(c["history"])
         ind = common.add_indicators(df)
         ev = common.evaluate(ind)
-        if ev["verdict"] == "BUY" and ev["confidence"] >= MIN_CONFIDENCE:
-            picks.append((ev["confidence"], c, ev))
+        if ev["verdict"] != "BUY" or ev["confidence"] < MIN_CONFIDENCE:
+            continue
+        tp = common.price_targets(ev["close"], ev["atr14"], "BUY")
+        if not common.meets_min_return(tp):
+            continue  # 채권형 ETF 등 변동폭이 미미한 종목 제외
+        picks.append((ev["confidence"], c, ev, tp))
     picks.sort(key=lambda x: x[0], reverse=True)
     picks = picks[:AI_REVIEW_MAX]
 
     # 2단계: 뉴스 수집 + AI 종합 판단
     print(f"\n[AI 검토] 규칙기반 후보 {len(picks)}개에 대해 뉴스 수집 + AI 판단 중...")
     ai_picks = []
-    for conf, c, ev in picks:
-        tp = common.price_targets(ev["close"], ev["atr14"], "BUY")
+    for conf, c, ev, tp in picks:
         news = ai_judge.fetch_news(c["name"])
         ai = ai_judge.ai_analyze(c["code"], c["name"], ev, tp, news)
         if ai is None:
@@ -194,21 +204,31 @@ def main():
             continue
         print(f"  {c['name']}: AI={ai['decision']} (신뢰도 {ai['confidence']}%)")
         if ai["decision"] == "BUY":
+            ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
+            if not common.meets_min_return(ai_tp_check):
+                print(f"    -> AI 목표가가 기대수익 기준 미달로 제외 ({ai['target_price']:,}원)")
+                continue
+            rs = common.rank_score(ai["confidence"], ev["close"], ai["target_price"])
             ai_picks.append({"mode": "ai", "conf": ai["confidence"], "c": c, "ev": ev,
-                              "tp": tp, "ai": ai, "news": news})
+                              "tp": tp, "ai": ai, "news": news, "rank": rs})
 
-    ai_picks.sort(key=lambda x: x["conf"], reverse=True)
+    # 규칙기반 폴백 항목도 동일한 기준으로 종합점수 계산
+    for p in ai_picks:
+        if p["mode"] == "rule" and "rank" not in p:
+            p["rank"] = common.rank_score(p["ev"]["confidence"] * 100, p["tp"]["entry"], p["tp"]["target"])
+
+    ai_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
     final_picks = ai_picks  # 개수 상한 없음: AI가 승인한 만큼(목표 약 10개, 많으면 더/적으면 덜)
 
     if not final_picks:
         common.send_telegram("📋 오늘 아침 기준, AI 검토를 통과한 매수 신호가 없습니다.\n장중에 조건이 확정되면 알림을 보내드릴게요.")
-    for rank, p in enumerate(final_picks, 1):
+    for rank_no, p in enumerate(final_picks, 1):
         c, ev = p["c"], p["ev"]
         if p["mode"] == "ai":
-            body = ai_judge.format_ai_alert(c["code"], c["name"], ev, p["ai"], p["news"])
+            body = ai_judge.format_ai_alert(c["code"], c["name"], ev, p["ai"], p["news"], p["rank"])
         else:
-            body = common.format_alert(c["code"], c["name"], ev, p["tp"])
-        msg = f"[오늘의 매수 후보 {rank}/{len(final_picks)}]\n" + body
+            body = common.format_alert(c["code"], c["name"], ev, p["tp"], p["rank"])
+        msg = f"[오늘의 매수 후보 {rank_no}/{len(final_picks)} · 종합점수 {p['rank']['score']}점]\n" + body
         common.send_telegram(msg)
 
 

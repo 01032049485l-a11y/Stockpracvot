@@ -142,18 +142,20 @@ def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list) -> dict | N
         return None
 
 
-def format_ai_alert(code: str, name: str, ev: dict, ai: dict, news: list) -> str:
+def format_ai_alert(code: str, name: str, ev: dict, ai: dict, news: list, rank: dict = None) -> str:
     reasons_lines = "\n".join(f"  {i+1}. {r}" for i, r in enumerate(ai["reasons"]))
     news_lines = "\n".join(f"  · {n['title']}" for n in news[:3]) if news else "  · (관련 뉴스 없음)"
     days = ai["target_days"]
     when = "오늘 중" if days <= 0 else f"약 {days}거래일 이내"
+    rank_line = f"종합순위 점수: {rank['score']}점 (신뢰도+수익률 합산)\n" if rank else ""
     return (
-        f"<b>🤖 AI 종합 매수 신호</b>\n"
+        f"<b>🟢🤖 AI 종합 매수 신호</b>\n"
         f"종목: <b>{name}</b> ({code})\n"
         f"현재가: {ev['close']:,.0f}원\n"
-        f"AI 목표매도가: {ai['target_price']:,}원\n"
+        f"AI 목표매도가: {ai['target_price']:,}원 (예상 수익률 +{rank['return_pct'] if rank else 0:.1f}%)\n"
         f"예상 도달 시점: {when}\n"
         f"AI 신뢰도: {ai['confidence']}%   (기술적 신뢰도 {ev['confidence']*100:.0f}%)\n"
+        f"{rank_line}"
         f"\n"
         f"📌 왜 오를 것으로 판단했나\n"
         f"{ai['summary']}\n"

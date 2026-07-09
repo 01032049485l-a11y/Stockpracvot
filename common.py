@@ -214,6 +214,39 @@ def price_targets(entry: float, atr: float, direction: str) -> dict:
     }
 
 
+MIN_EXPECTED_RETURN_PCT = 0.02  # 목표가까지 최소 2% 이상 기대수익이 있어야 후보로 인정
+
+
+def meets_min_return(tp: dict, min_pct: float = MIN_EXPECTED_RETURN_PCT) -> bool:
+    """목표가가 현재가 대비 최소 기대수익률 이상인지 확인.
+    채권형 ETF 등 변동성이 거의 없는 상품이 후보로 올라오는 것을 방지."""
+    entry = tp.get("entry", 0)
+    target = tp.get("target", 0)
+    if entry <= 0:
+        return False
+    return abs(target - entry) / entry >= min_pct
+
+
+def expected_return_pct(entry: float, target: float) -> float:
+    """목표가까지의 기대수익률(%)"""
+    if not entry:
+        return 0.0
+    return (target - entry) / entry * 100
+
+
+RETURN_SCORE_CAP_PCT = 15.0  # 이 이상의 수익률은 만점(100) 처리 (극단치가 순위를 과도하게 좌우하지 않도록)
+
+
+def rank_score(confidence_pct: float, entry: float, target: float,
+                conf_weight: float = 0.5, return_weight: float = 0.5) -> dict:
+    """신뢰도(0~100)와 기대수익률을 합산한 종합순위 점수(0~100)를 계산.
+    수익률은 RETURN_SCORE_CAP_PCT를 100점 만점 기준으로 정규화해서 신뢰도와 같은 스케일로 맞춘다."""
+    ret_pct = expected_return_pct(entry, target)
+    return_score = min(max(ret_pct, 0) / RETURN_SCORE_CAP_PCT * 100, 100)
+    score = confidence_pct * conf_weight + return_score * return_weight
+    return {"score": round(score, 1), "return_pct": round(ret_pct, 2), "confidence_pct": round(confidence_pct, 1)}
+
+
 # ----------------------------------------------------------------
 # 텔레그램 전송
 # ----------------------------------------------------------------
@@ -231,16 +264,19 @@ def send_telegram(text: str):
         print(f"[텔레그램 전송 실패] {resp.status_code} {resp.text}")
 
 
-def format_alert(code: str, name: str, ev: dict, tp: dict) -> str:
-    direction = "🔴 상승 신호 (매수 관점)" if ev["verdict"] == "BUY" else "🔵 하락 신호 (매도/주의 관점)"
+def format_alert(code: str, name: str, ev: dict, tp: dict, rank: dict = None) -> str:
+    direction = "🟢 상승 신호 (매수 관점)" if ev["verdict"] == "BUY" else "🔵 하락 신호 (매도/주의 관점)"
     reasons = "\n".join(f"  · {r}" for r in ev["reasons"] if "중립" not in r and "평상" not in r and "유지" not in r or True)
+    ret_pct = expected_return_pct(tp["entry"], tp["target"])
+    rank_line = f"종합순위 점수: {rank['score']}점 (신뢰도+수익률 합산)\n" if rank else ""
     return (
         f"<b>{direction}</b>\n"
         f"종목: <b>{name}</b> ({code})\n"
         f"현재가(기준가): {tp['entry']:,}원\n"
-        f"목표매도가(예상): {tp['target']:,}원\n"
+        f"목표매도가(예상): {tp['target']:,}원 (예상 수익률 +{ret_pct:.1f}%)\n"
         f"손절가(참고): {tp['stop']:,}원  (위험대비수익 {tp['risk_reward']})\n"
         f"신뢰도: {ev['confidence']*100:.0f}%   추세: {ev['trend']}\n"
+        f"{rank_line}"
         f"근거:\n{reasons}\n"
         f"─────────────\n"
         f"※ 과거 데이터 기반 기술적 추정치이며 투자 권유가 아닙니다."

@@ -108,6 +108,9 @@ def main():
             continue
 
         tp = common.price_targets(ev["close"], ev["atr14"], "BUY")
+        if not common.meets_min_return(tp):
+            continue  # 채권형 ETF 등 변동폭이 미미한 종목 제외
+
         news = ai_judge.fetch_news(name)
         ai = ai_judge.ai_analyze(code, name, ev, tp, news)
 
@@ -117,9 +120,16 @@ def main():
             continue
 
         if ai is not None:
-            msg = ai_judge.format_ai_alert(code, name, ev, ai, news)
+            ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
+            if not common.meets_min_return(ai_tp_check):
+                print(f"  [제외] {name}({code}) - AI 목표가 기대수익 기준 미달")
+                alerted[key] = now_kst().isoformat()
+                continue
+            rs = common.rank_score(ai["confidence"], ev["close"], ai["target_price"])
+            msg = ai_judge.format_ai_alert(code, name, ev, ai, news, rs)
         else:
-            msg = common.format_alert(code, name, ev, tp)  # AI 판단 불가 시 규칙기반으로 대체
+            rs = common.rank_score(ev["confidence"] * 100, tp["entry"], tp["target"])
+            msg = common.format_alert(code, name, ev, tp, rs)  # AI 판단 불가 시 규칙기반으로 대체
 
         common.send_telegram(msg)
         alerted[key] = now_kst().isoformat()
