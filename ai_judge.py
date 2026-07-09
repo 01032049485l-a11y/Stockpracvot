@@ -14,6 +14,8 @@ import re
 import json
 import html
 import requests
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 ANTHROPIC_MODEL = "claude-sonnet-5"
 ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
@@ -222,6 +224,70 @@ def format_watchlist_alert(code: str, name: str, ev: dict, ai: dict, news: list)
         f"─────────────\n"
         f"※ 확신 있는 매수신호가 아닌 참고용 정보입니다. 매수 권유가 아닙니다."
     )
+
+
+POSITION_MODEL = "claude-sonnet-5"
+
+
+def reevaluate_position(code: str, name: str, entry_price: float, current_price: float,
+                         stop_price: float, target_price: float, entry_time: str) -> dict | None:
+    """이미 보유 중인 포지션을 그 순간 다시 판단: 지금 팔아서 확정할지, 더 들고 갈지.
+    목표는 '오늘 하루 동안 이 포지션의 수익 최대화'. 목표가는 참고치일 뿐 절대기준 아님.
+    손절가는 이 함수 호출 전에 이미 별도로 강제 처리되므로 여기서는 다루지 않는다."""
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return None
+
+    pnl_pct = (current_price - entry_price) / entry_price * 100
+    to_target_pct = (target_price - current_price) / current_price * 100 if current_price else 0
+    now = datetime.now(ZoneInfo("Asia/Seoul"))
+    hm = now.hour * 100 + now.minute
+    near_close = hm >= 1430
+
+    prompt = f"""당신은 당일 데이트레이딩 포지션을 관리하는 30년 경력 트레이더입니다.
+목표는 단 하나, "오늘 장 마감 전까지 이 포지션에서 실현손익을 최대화"하는 것입니다.
+목표가는 아침에 잡아둔 참고치일 뿐 절대적인 매도 기준이 아닙니다.
+지금 이 순간의 모멘텀을 보고 스스로 판단하세요.
+
+[종목] {name} ({code})
+[매수가] {entry_price:,.0f}원
+[현재가] {current_price:,.0f}원 (현재 수익률 {pnl_pct:+.2f}%)
+[원래 목표가] {target_price:,.0f}원 (남은 거리 {to_target_pct:+.2f}%)
+[매수 시각] {entry_time}
+[현재 시각] {now.strftime('%H:%M')} {"(장마감 임박, 15:30 전 반드시 청산되어야 함)" if near_close else ""}
+
+판단 기준:
+- 상승 모멘텀이 아직 살아있고 추가 상승 여력이 보이면 HOLD (목표가를 넘어서도 더 들고 가도 됨)
+- 상승 탄력이 눈에 띄게 죽었거나, 목표가 근처에서 정체/반락 조짐이 보이면 SELL로 지금 이익을 확정
+- 장마감이 임박했는데(15:30 전) 어중간하게 플러스 상태면, 수익을 그냥 반납하고 강제청산 당하기보다
+  지금 SELL로 확정하는 쪽을 더 적극적으로 고려하세요
+- 현재 마이너스 상태라도 손절가에는 아직 안 닿았고 반등 근거가 있다면 HOLD 가능(단, 장마감 임박시엔 신중하게)
+
+반드시 아래 JSON 형식으로만 답하세요:
+{{"action": "SELL 또는 HOLD", "reason": "1문장 이내 간결한 근거"}}"""
+
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+    }
+    body = {"model": POSITION_MODEL, "max_tokens": 200, "messages": [{"role": "user", "content": prompt}]}
+    try:
+        r = requests.post(ANTHROPIC_URL, headers=headers, json=body, timeout=20)
+        if r.status_code != 200:
+            print(f"  [경고] 포지션 재판단 API 오류 {r.status_code}")
+            return None
+        data = r.json()
+        text = "".join(b.get("text", "") for b in data.get("content", []) if b.get("type") == "text").strip()
+        text = re.sub(r"^```(json)?", "", text).strip()
+        text = re.sub(r"```$", "", text).strip()
+        parsed = json.loads(text)
+        if "action" not in parsed or "reason" not in parsed:
+            return None
+        return parsed
+    except Exception as e:
+        print(f"  [경고] 포지션 재판단 파싱 실패: {e}")
+        return None
 
 
 def format_ai_alert(code: str, name: str, ev: dict, ai: dict, news: list, rank: dict = None) -> str:
