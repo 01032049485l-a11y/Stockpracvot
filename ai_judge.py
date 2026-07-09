@@ -53,11 +53,16 @@ def fetch_news(stock_name: str, display: int = 5) -> list:
 
 def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list) -> str:
     news_block = "\n".join(f"- {n['title']} ({n['date']})" for n in news) if news else "(관련 뉴스 없음)"
-    return f"""당신은 신중한 국내주식 단기 스윙 트레이딩 애널리스트입니다.
+    return f"""당신은 신중한 국내주식 초단기 트레이딩 애널리스트입니다.
 아래는 기술적 지표 기반 시스템이 1차로 걸러낸 매수 후보 종목입니다.
+이 시스템은 "당일~3거래일 이내"의 빠른 상승을 노리는 신호입니다.
+완만한 중장기 상승 기대만으로는 부족하고, 며칠 안에 뚜렷하게 움직일
+근거(강한 모멘텀, 임박한 재료, 명확한 뉴스 촉매 등)가 있을 때만 BUY로 판단하세요.
+확신이 부족하면 과감히 PASS 하세요.
+
 기술적 신호, 최근 뉴스, 그리고 당신이 알고 있는 해당 종목/업종/시장 관련
 다른 유효한 정보(업황, 경쟁사 동향, 최근 실적 흐름, 거시 환경 등)까지 폭넓게
-종합해서, 오늘 아침 실제로 매수할 가치가 있는지 최종 판단해주세요.
+종합해서 판단해주세요.
 
 [종목] {name} ({code})
 [현재가] {ev['close']:,.0f}원
@@ -76,8 +81,11 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list) -> str:
 - 뉴스가 명확한 호재(신규 계약, 실적 서프라이즈, 정책 수혜 등)면 confidence를 높여도 됨
 - 뉴스 외에도 업황, 경쟁사 상황, 최근 실적 추이, 거시경제(금리/환율 등)처럼
   당신이 알고 있는 관련 정보가 있다면 반드시 판단에 반영하세요
-- target_days는 스윙 트레이딩 기준 통상 3~20 거래일 사이로, 판단한 근거들의 강도를 고려해 산정
-- target_price는 규칙기반 목표가를 참고하되, 재료가 강하면 소폭 상향 조정 가능(과도한 낙관 금지)
+- target_days는 반드시 0~3 사이의 정수로만 답하세요 (0=오늘 중, 1=익일, 2~3=2~3거래일 내).
+  이보다 긴 호흡이 필요해 보이는 종목은 BUY가 아니라 PASS로 처리하세요
+- target_price는 0~3거래일이라는 짧은 기간 안에 현실적으로 도달 가능한 수준으로
+  판단하세요. 규칙기반 목표가는 참고용이며, 기간이 짧으므로 그보다 낮게 잡는 것이
+  일반적입니다. 재료가 매우 강할 때만 규칙기반 목표가 수준까지 볼 수 있습니다
 
 판단에 사용한 근거는 "reasons" 배열에 항목별로 나눠 담아주세요. 각 항목은:
 - 15~40자 내외로 간결하게, 어떤 요인인지 앞에 태그를 붙여서 작성
@@ -89,7 +97,7 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list) -> str:
   사실에 기반해야 하며, 확인되지 않은 내용을 지어내지 마세요
 
 반드시 아래 JSON 형식으로만 답하세요. 다른 설명 텍스트는 절대 포함하지 마세요:
-{{"decision": "BUY 또는 PASS", "target_price": 정수, "target_days": 정수, "confidence": 0~100 정수, "summary": "한 줄 종합 요약(30자 내외)", "reasons": ["근거1", "근거2", "근거3"]}}"""
+{{"decision": "BUY 또는 PASS", "target_price": 정수, "target_days": 0~3 사이 정수, "confidence": 0~100 정수, "summary": "한 줄 종합 요약(30자 내외)", "reasons": ["근거1", "근거2", "근거3"]}}"""
 
 
 def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list) -> dict | None:
@@ -137,12 +145,14 @@ def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list) -> dict | N
 def format_ai_alert(code: str, name: str, ev: dict, ai: dict, news: list) -> str:
     reasons_lines = "\n".join(f"  {i+1}. {r}" for i, r in enumerate(ai["reasons"]))
     news_lines = "\n".join(f"  · {n['title']}" for n in news[:3]) if news else "  · (관련 뉴스 없음)"
+    days = ai["target_days"]
+    when = "오늘 중" if days <= 0 else f"약 {days}거래일 이내"
     return (
         f"<b>🤖 AI 종합 매수 신호</b>\n"
         f"종목: <b>{name}</b> ({code})\n"
         f"현재가: {ev['close']:,.0f}원\n"
         f"AI 목표매도가: {ai['target_price']:,}원\n"
-        f"예상 도달 기간: 약 {ai['target_days']}거래일 이내\n"
+        f"예상 도달 시점: {when}\n"
         f"AI 신뢰도: {ai['confidence']}%   (기술적 신뢰도 {ev['confidence']*100:.0f}%)\n"
         f"\n"
         f"📌 왜 오를 것으로 판단했나\n"

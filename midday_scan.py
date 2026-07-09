@@ -22,8 +22,8 @@ import ai_judge
 KST = ZoneInfo("Asia/Seoul")
 CANDIDATES_FILE = "candidates.json"
 MIN_CONFIDENCE = 0.70
-AI_REVIEW_MAX = 15
-TOP_N = 5
+AI_REVIEW_MAX = 25
+TARGET_N = 10  # 목표 개수(가이드용) - 이보다 많으면 있는 만큼 다 보내고, 적으면 적은 대로 보냄
 MAX_WORKERS = 15
 
 
@@ -105,7 +105,7 @@ def main():
                               "tp": tp, "ai": ai, "news": news})
 
     ai_picks.sort(key=lambda x: x["conf"], reverse=True)
-    final_picks = ai_picks[:TOP_N]
+    final_picks = ai_picks  # 개수 상한 없음
 
     if not final_picks:
         common.send_telegram(

@@ -167,8 +167,8 @@ def main():
 
     # 1단계: 규칙기반 매수 후보 (신뢰도 70% 이상)
     MIN_CONFIDENCE = 0.70
-    AI_REVIEW_MAX = 15   # AI+뉴스 검토 대상 상한 (API 비용/시간 관리)
-    TOP_N = 5
+    AI_REVIEW_MAX = 25   # AI+뉴스 검토 대상 상한 (API 비용/시간 관리, 기존 15->25로 확대)
+    TARGET_N = 10        # 목표 개수(가이드용) - 이보다 많으면 있는 만큼 다 보내고, 적으면 적은 대로 보냄
     picks = []
     for c in candidates:
         if c["verdict"] != "BUY":
@@ -198,7 +198,7 @@ def main():
                               "tp": tp, "ai": ai, "news": news})
 
     ai_picks.sort(key=lambda x: x["conf"], reverse=True)
-    final_picks = ai_picks[:TOP_N]
+    final_picks = ai_picks  # 개수 상한 없음: AI가 승인한 만큼(목표 약 10개, 많으면 더/적으면 덜)
 
     if not final_picks:
         common.send_telegram("📋 오늘 아침 기준, AI 검토를 통과한 매수 신호가 없습니다.\n장중에 조건이 확정되면 알림을 보내드릴게요.")
