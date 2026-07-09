@@ -51,34 +51,91 @@ def fetch_news(stock_name: str, display: int = 5) -> list:
     return news
 
 
-def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list) -> str:
-    news_block = "\n".join(f"- {n['title']} ({n['date']})" for n in news) if news else "(관련 뉴스 없음)"
-    return f"""당신은 신중한 국내주식 초단기 트레이딩 애널리스트입니다.
-아래는 기술적 지표 기반 시스템이 1차로 걸러낸 매수 후보 종목입니다.
-이 시스템은 "당일~3거래일 이내"의 빠른 상승을 노리는 신호입니다.
-완만한 중장기 상승 기대만으로는 부족하고, 며칠 안에 뚜렷하게 움직일
-근거(강한 모멘텀, 임박한 재료, 명확한 뉴스 촉매 등)가 있을 때만 BUY로 판단하세요.
-확신이 부족하면 과감히 PASS 하세요.
+FUNDAMENTAL_URL = "https://finance.naver.com/item/main.naver"
 
-기술적 신호, 최근 뉴스, 그리고 당신이 알고 있는 해당 종목/업종/시장 관련
-다른 유효한 정보(업황, 경쟁사 동향, 최근 실적 흐름, 거시 환경 등)까지 폭넓게
-종합해서 판단해주세요.
+
+def fetch_fundamentals(code: str) -> dict:
+    """네이버 금융에서 PER/PBR을 가져온다. 실패하면 빈 dict 반환(프롬프트에서 N/A 처리)."""
+    try:
+        r = requests.get(FUNDAMENTAL_URL, params={"code": code},
+                          headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        if r.status_code != 200:
+            return {}
+        html_text = r.text
+        per_m = re.search(r'id="_per"[^>]*>\s*([\d,\.]+)', html_text)
+        pbr_m = re.search(r'id="_pbr"[^>]*>\s*([\d,\.]+)', html_text)
+        result = {}
+        if per_m:
+            result["per"] = per_m.group(1)
+        if pbr_m:
+            result["pbr"] = pbr_m.group(1)
+        return result
+    except Exception:
+        return {}
+
+
+def fetch_earnings_news(stock_name: str, display: int = 3) -> list:
+    """실적/컨퍼런스콜 관련 뉴스를 별도로 가져온다 (fetch_news와 동일 API, 쿼리만 다름)."""
+    return fetch_news(f"{stock_name} 실적", display=display)
+
+
+def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list,
+                   fundamentals: dict = None, earnings_news: list = None,
+                   market_sentiment: dict = None) -> str:
+    fundamentals = fundamentals or {}
+    earnings_news = earnings_news or []
+    news_block = "\n".join(f"- {n['title']} ({n['date']})" for n in news) if news else "(관련 뉴스 없음)"
+    earnings_block = "\n".join(f"- {n['title']} ({n['date']})" for n in earnings_news) if earnings_news else "(관련 실적 뉴스 없음)"
+    per = fundamentals.get("per", "N/A")
+    pbr = fundamentals.get("pbr", "N/A")
+
+    if market_sentiment:
+        sentiment_block = (
+            f"[시장 전체 심리 - 자체 산출 공포/탐욕 지수: {market_sentiment['score']}/100 "
+            f"({market_sentiment['label']})]\n"
+            f"(0에 가까울수록 시장 전체가 극단적 공포·과매도, 100에 가까울수록 극단적 탐욕·과열 상태.\n"
+            f" 오늘 스캔한 코스피/코스닥 전종목 중 20일선 위/RSI 50 이상 비율로 자체 산출)\n"
+        )
+    else:
+        sentiment_block = "[시장 전체 심리] 산출 안 됨\n"
+
+    return f"""당신은 30년 경력의 월스트리트 트레이더 출신 전문 애널리스트입니다.
+워런 버핏이 조언을 구할 정도로 이 분야에 정통하며, 뉴스 헤드라인이나 단순 차트 패턴에
+휩쓸리지 않고 실적, 밸류에이션, 거시 환경, 시장 전체 심리까지 종합해서 냉정하게
+판단하는 것으로 유명합니다. 유행이나 소문이 아니라 데이터와 근거로만 결론을 냅니다.
+
+※ 이 시스템은 대한민국 국내 증시(코스피/코스닥)에 상장된 종목만 다룹니다.
+  해외 종목은 절대 고려하거나 언급하지 마세요.
+
+아래는 기술적 지표 기반 시스템이 1차로 걸러낸 국내주식 매수 후보입니다.
+이 신호는 "당일~3거래일 이내"의 빠른 상승을 노리는 단기 신호이지만,
+판단 자체는 중장기 투자자의 안목으로 진행하세요. 즉, 단기 차트가 좋아 보여도
+밸류에이션이 지나치게 부담스럽거나, 시장 전체가 과열(탐욕) 국면이라 단기 조정
+위험이 크거나, 펀더멘털에 구조적 문제가 있다면 과감히 PASS 하세요.
+반대로 시장이 과도한 공포로 짓눌려 있는데 이 종목만 개별 호재로 반등하는
+그림이면, 그 근거가 확실할 때 오히려 확신 있게 BUY 할 수 있습니다.
 
 [종목] {name} ({code})
 [현재가] {ev['close']:,.0f}원
+[밸류에이션] PER {per}배 / PBR {pbr}배
 [기술적 판단] {ev['verdict']} (규칙기반 신뢰도 {ev['confidence']*100:.0f}%)
 [추세] {ev['trend']}
-[기술적 근거]
+[기술적 근거 - 이동평균크로스/RSI/MACD/볼린저밴드/거래량]
 {chr(10).join('- ' + r for r in ev['reasons'])}
 [규칙기반 목표가] {tp['target']:,}원 / 손절가 {tp['stop']:,}원
 
+{sentiment_block}
 [최근 뉴스 헤드라인]
 {news_block}
 
+[실적/컨퍼런스콜 관련 뉴스]
+{earnings_block}
+
 다음 기준으로 신중하게 판단하세요:
 - 뉴스에 악재(실적 부진, 소송, 규제, 경영진 리스크 등)가 있으면 기술적 신호가 좋아도 PASS
-- 뉴스가 중립/무관하면 기술적 신호를 신뢰
-- 뉴스가 명확한 호재(신규 계약, 실적 서프라이즈, 정책 수혜 등)면 confidence를 높여도 됨
+- PER/PBR이 동종업계 대비 지나치게 고평가된 상태라면(당신의 지식 기준으로 판단) 신중하게 접근하고 confidence를 낮추세요. 밸류에이션 데이터가 N/A이면 이 조건은 건너뛰세요
+- 실적/컨퍼런스콜 뉴스에 가이던스 하향, 어닝 쇼크 등이 있으면 기술적 신호와 무관하게 PASS
+- 시장 전체 심리(공포/탐욕 지수)가 극단적 탐욕(80 이상)이면 개별 종목이 아무리 좋아도 단기 과열/조정 위험을 감안해 신중하게, 극단적 공포(20 이하)면 진짜 옥석만 가려 신중하되 기회로 볼 수 있음
 - 뉴스 외에도 업황, 경쟁사 상황, 최근 실적 추이, 거시경제(금리/환율 등)처럼
   당신이 알고 있는 관련 정보가 있다면 반드시 판단에 반영하세요
 - target_days는 반드시 0~3 사이의 정수로만 답하세요 (0=오늘 중, 1=익일, 2~3=2~3거래일 내).
@@ -89,25 +146,28 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list) -> str:
 
 판단에 사용한 근거는 "reasons" 배열에 항목별로 나눠 담아주세요. 각 항목은:
 - 15~40자 내외로 간결하게, 어떤 요인인지 앞에 태그를 붙여서 작성
-  (예: "[기술적] 골든크로스와 거래량 급증 동반", "[뉴스] 2분기 실적 서프라이즈 발표",
+  (예: "[기술적] 골든크로스와 거래량 급증 동반", "[밸류에이션] PER 업종 평균 하회",
+   "[실적] 컨센서스 상회 어닝 서프라이즈", "[시장심리] 과열 국면으로 단기 조정 유의",
    "[업황] 반도체 업사이클 진입 국면", "[리스크] 밸류에이션 부담 존재" 등)
 - 매수(BUY) 판단이면 근거가 되는 긍정 요인 위주로 3~5개
 - 반려(PASS) 판단이면 반려 사유가 되는 요인 위주로 2~4개
-- 근거는 반드시 위에 제시된 기술적 지표/뉴스 내용 또는 당신이 실제로 알고 있는
-  사실에 기반해야 하며, 확인되지 않은 내용을 지어내지 마세요
+- 근거는 반드시 위에 제시된 데이터 또는 당신이 실제로 알고 있는 사실에 기반해야
+  하며, 확인되지 않은 내용을 지어내지 마세요
 
 반드시 아래 JSON 형식으로만 답하세요. 다른 설명 텍스트는 절대 포함하지 마세요:
 {{"decision": "BUY 또는 PASS", "target_price": 정수, "target_days": 0~3 사이 정수, "confidence": 0~100 정수, "summary": "한 줄 종합 요약(30자 내외)", "reasons": ["근거1", "근거2", "근거3"]}}"""
 
 
-def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list) -> dict | None:
+def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list,
+                fundamentals: dict = None, earnings_news: list = None,
+                market_sentiment: dict = None) -> dict | None:
     """Claude API 호출. 실패하거나 파싱 안 되면 None 반환 (호출부에서 스킵 처리)."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         print("  [경고] ANTHROPIC_API_KEY가 없어 AI 판단을 건너뜁니다.")
         return None
 
-    prompt = _build_prompt(code, name, ev, tp, news)
+    prompt = _build_prompt(code, name, ev, tp, news, fundamentals, earnings_news, market_sentiment)
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",
@@ -115,7 +175,7 @@ def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list) -> dict | N
     }
     body = {
         "model": ANTHROPIC_MODEL,
-        "max_tokens": 400,
+        "max_tokens": 500,
         "messages": [{"role": "user", "content": prompt}],
     }
     try:

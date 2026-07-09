@@ -57,6 +57,7 @@ def main():
     if not data or not data.get("candidates"):
         print("후보 목록이 없습니다. daily_scan.py를 먼저 실행하세요.")
         return
+    market_sentiment = data.get("market_sentiment")
 
     today = now_kst().strftime("%Y%m%d")
     fetch_start = (now_kst() - timedelta(days=10)).strftime("%Y-%m-%d")
@@ -112,7 +113,10 @@ def main():
             continue  # 채권형 ETF 등 변동폭이 미미한 종목 제외
 
         news = ai_judge.fetch_news(name)
-        ai = ai_judge.ai_analyze(code, name, ev, tp, news)
+        fundamentals = ai_judge.fetch_fundamentals(code)
+        earnings_news = ai_judge.fetch_earnings_news(name)
+        ai = ai_judge.ai_analyze(code, name, ev, tp, news,
+                                  fundamentals, earnings_news, market_sentiment)
 
         if ai is not None and ai["decision"] != "BUY":
             print(f"  [AI 반려] {name}({code}) - {ai.get('summary','')[:60]}")

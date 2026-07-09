@@ -124,6 +124,11 @@ def main():
     total = len(tickers)
     code_name = {row["Code"]: row["Name"] for _, row in tickers.iterrows()}
 
+    # 시장 전체 공포/탐욕 심리 집계용 카운터 (스캔한 전종목 대상, 후보 여부와 무관)
+    sentiment_total = 0
+    sentiment_above_ma20 = 0
+    sentiment_rsi_bullish = 0
+
     def task(code):
         return code, fetch_history(code, start)
 
@@ -145,6 +150,15 @@ def main():
             ind = common.add_indicators(df)
             ev = common.evaluate(ind)
 
+            # 시장심리 집계 (후보 채택 여부와 무관하게 전체 반영)
+            if ev.get("ma60") is not None:
+                sentiment_total += 1
+                last_rsi = ind["rsi"].iloc[-1]
+                if ev["close"] > ind["ma20"].iloc[-1]:
+                    sentiment_above_ma20 += 1
+                if last_rsi >= 50:
+                    sentiment_rsi_bullish += 1
+
             is_confirmed = ev["verdict"] == "BUY"
             is_near = (not is_confirmed) and ev["score"] >= 2.0 and ev["trend"] == "상승추세"
             if not (is_confirmed or is_near):
@@ -159,6 +173,12 @@ def main():
                 "history": df.tail(100).to_dict("records"),
             })
 
+    market_sentiment = common.compute_market_sentiment(
+        sentiment_total, sentiment_above_ma20, sentiment_rsi_bullish
+    )
+    print(f"\n[시장심리] 공포/탐욕 지수: {market_sentiment['score']}/100 ({market_sentiment['label']}) "
+          f"- 스캔 {sentiment_total}종목 기준")
+
     candidates.sort(key=lambda c: abs(c["score"]), reverse=True)
     candidates = candidates[:CANDIDATE_MAX]
 
@@ -166,6 +186,7 @@ def main():
         "generated_at": now.isoformat(),
         "count": len(candidates),
         "candidates": candidates,
+        "market_sentiment": market_sentiment,
     }
     common.save_json(CANDIDATES_FILE, out)
 
@@ -192,12 +213,15 @@ def main():
     picks.sort(key=lambda x: x[0], reverse=True)
     picks = picks[:AI_REVIEW_MAX]
 
-    # 2단계: 뉴스 수집 + AI 종합 판단
-    print(f"\n[AI 검토] 규칙기반 후보 {len(picks)}개에 대해 뉴스 수집 + AI 판단 중...")
+    # 2단계: 뉴스 + 재무지표 + 실적뉴스 수집 후 AI 종합 판단 (시장 전체 심리 포함)
+    print(f"\n[AI 검토] 규칙기반 후보 {len(picks)}개에 대해 뉴스/재무/실적 수집 + AI 판단 중...")
     ai_picks = []
     for conf, c, ev, tp in picks:
         news = ai_judge.fetch_news(c["name"])
-        ai = ai_judge.ai_analyze(c["code"], c["name"], ev, tp, news)
+        fundamentals = ai_judge.fetch_fundamentals(c["code"])
+        earnings_news = ai_judge.fetch_earnings_news(c["name"])
+        ai = ai_judge.ai_analyze(c["code"], c["name"], ev, tp, news,
+                                  fundamentals, earnings_news, market_sentiment)
         if ai is None:
             # AI 판단 불가 시 규칙기반 결과로 대체(폴백)
             ai_picks.append({"mode": "rule", "conf": conf, "c": c, "ev": ev, "tp": tp})

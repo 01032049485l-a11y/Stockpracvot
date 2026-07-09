@@ -48,6 +48,7 @@ def main():
     today = now_kst().strftime("%Y%m%d")
     fetch_start = (now_kst() - timedelta(days=10)).strftime("%Y-%m-%d")
     candidates = data["candidates"]
+    market_sentiment = data.get("market_sentiment")
 
     print(f"[1/2] 오전장 시세 반영 재계산 중... (후보 {len(candidates)}개)")
 
@@ -97,7 +98,10 @@ def main():
     ai_picks = []
     for conf, c, ev, tp in picks:
         news = ai_judge.fetch_news(c["name"])
-        ai = ai_judge.ai_analyze(c["code"], c["name"], ev, tp, news)
+        fundamentals = ai_judge.fetch_fundamentals(c["code"])
+        earnings_news = ai_judge.fetch_earnings_news(c["name"])
+        ai = ai_judge.ai_analyze(c["code"], c["name"], ev, tp, news,
+                                  fundamentals, earnings_news, market_sentiment)
         if ai is None:
             ai_picks.append({"mode": "rule", "conf": conf, "c": c, "ev": ev, "tp": tp})
             continue

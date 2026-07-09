@@ -214,6 +214,29 @@ def price_targets(entry: float, atr: float, direction: str) -> dict:
     }
 
 
+def market_sentiment_label(score: int) -> str:
+    if score >= 80:
+        return "극단적 탐욕"
+    if score >= 60:
+        return "탐욕"
+    if score >= 40:
+        return "중립"
+    if score >= 20:
+        return "공포"
+    return "극단적 공포"
+
+
+def compute_market_sentiment(total: int, above_ma20: int, rsi_bullish: int) -> dict:
+    """스캔한 전체 종목 중 '20일선 위' 비율과 'RSI 50 이상' 비율을 절반씩 반영해
+    0~100 공포/탐욕 지수를 자체 산출한다 (외부 API 의존 없이 직접 계산)."""
+    if total == 0:
+        return {"score": 50, "label": "중립(데이터부족)"}
+    pct_ma20 = above_ma20 / total * 100
+    pct_rsi = rsi_bullish / total * 100
+    score = round((pct_ma20 + pct_rsi) / 2)
+    return {"score": score, "label": market_sentiment_label(score)}
+
+
 MIN_EXPECTED_RETURN_PCT = 0.02  # 목표가까지 최소 2% 이상 기대수익이 있어야 후보로 인정
 
 
