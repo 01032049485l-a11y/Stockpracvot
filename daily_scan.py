@@ -246,6 +246,15 @@ def main():
     ai_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
     final_picks = ai_picks  # 개수 상한 없음: AI가 승인한 만큼(목표 약 10개, 많으면 더/적으면 덜)
 
+    # 모의매매용: 오늘 승인된 픽을 저장 (paper_buy.py가 실제 시가로 가상매수할 때 사용)
+    today_picks = [{
+        "code": p["c"]["code"], "name": p["c"]["name"],
+        "stop_price": p["tp"]["stop"], "target_price": (p["ai"]["target_price"] if p["mode"] == "ai" else p["tp"]["target"]),
+        "target_days": (p["ai"]["target_days"] if p["mode"] == "ai" else 1),
+        "rank_score": p["rank"]["score"],
+    } for p in final_picks]
+    common.save_json("today_picks.json", {"date": now.strftime("%Y-%m-%d"), "picks": today_picks})
+
     if final_picks:
         for rank_no, p in enumerate(final_picks, 1):
             c, ev = p["c"], p["ev"]
