@@ -125,8 +125,8 @@ def main():
 
         if ai is not None:
             ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
-            if not common.meets_min_return(ai_tp_check):
-                print(f"  [제외] {name}({code}) - AI 목표가 기대수익 기준 미달")
+            if ai["target_price"] <= ev["close"] or not common.meets_min_return(ai_tp_check):
+                print(f"  [제외] {name}({code}) - AI 목표가가 비정상이거나 기대수익 기준 미달")
                 alerted[key] = now_kst().isoformat()
                 continue
             rs = common.rank_score(ai["confidence"], ev["close"], ai["target_price"])

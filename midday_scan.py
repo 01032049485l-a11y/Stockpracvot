@@ -110,8 +110,8 @@ def main():
         all_reviewed.append({"c": c, "ev": ev, "ai": ai, "news": news})
         if ai["decision"] == "BUY":
             ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
-            if not common.meets_min_return(ai_tp_check):
-                print(f"    -> AI 목표가가 기대수익 기준 미달로 제외 ({ai['target_price']:,}원)")
+            if ai["target_price"] <= ev["close"] or not common.meets_min_return(ai_tp_check):
+                print(f"    -> AI 목표가가 비정상이거나 기대수익 기준 미달로 제외 ({ai['target_price']:,}원)")
                 continue
             rs = common.rank_score(ai["confidence"], ev["close"], ai["target_price"])
             ai_picks.append({"mode": "ai", "conf": ai["confidence"], "c": c, "ev": ev,
@@ -123,6 +123,26 @@ def main():
 
     ai_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
     final_picks = ai_picks  # 개수 상한 없음
+
+    MIN_DAILY_PICKS = 3
+    if len(final_picks) < MIN_DAILY_PICKS and all_reviewed:
+        picked_codes = {p["c"]["code"] for p in final_picks}
+        fillers = [w for w in all_reviewed if w["c"]["code"] not in picked_codes]
+        fillers.sort(key=lambda x: x["ai"]["confidence"], reverse=True)
+        needed = MIN_DAILY_PICKS - len(final_picks)
+        for w in fillers[:needed]:
+            ai = w["ai"]
+            ev = w["ev"]
+            rule_tp = common.price_targets(ev["close"], ev["atr14"], "BUY")
+            tp_check = {"entry": ev["close"], "target": ai["target_price"]}
+            ai_target_valid = ai["target_price"] > ev["close"] and common.meets_min_return(tp_check)
+            target_price = ai["target_price"] if ai_target_valid else rule_tp["target"]
+            promoted_tp = {"entry": ev["close"], "target": target_price,
+                           "stop": rule_tp["stop"], "risk_reward": "1:2"}
+            rs = common.rank_score(ai["confidence"], ev["close"], target_price)
+            final_picks.append({"mode": "promoted", "conf": ai["confidence"], "c": w["c"], "ev": ev,
+                                 "tp": promoted_tp, "ai": ai, "news": w["news"], "rank": rs})
+        final_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
 
     if not final_picks:
         if all_reviewed:
@@ -145,6 +165,8 @@ def main():
         c, ev = p["c"], p["ev"]
         if p["mode"] == "ai":
             body = ai_judge.format_ai_alert(c["code"], c["name"], ev, p["ai"], p["news"], p["rank"])
+        elif p["mode"] == "promoted":
+            body = ai_judge.format_promoted_alert(c["code"], c["name"], ev, p["ai"], p["news"], p["tp"], p["rank"])
         else:
             body = common.format_alert(c["code"], c["name"], ev, p["tp"], p["rank"])
         msg = f"[오후 재점검 {rank_no}/{len(final_picks)} · 종합점수 {p['rank']['score']}점] (오전장 흐름 반영)\n" + body

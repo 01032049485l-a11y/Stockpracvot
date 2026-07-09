@@ -231,8 +231,8 @@ def main():
         all_reviewed.append({"c": c, "ev": ev, "ai": ai, "news": news})
         if ai["decision"] == "BUY":
             ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
-            if not common.meets_min_return(ai_tp_check):
-                print(f"    -> AI 목표가가 기대수익 기준 미달로 제외 ({ai['target_price']:,}원)")
+            if ai["target_price"] <= ev["close"] or not common.meets_min_return(ai_tp_check):
+                print(f"    -> AI 목표가가 비정상이거나 기대수익 기준 미달로 제외 ({ai['target_price']:,}원)")
                 continue
             rs = common.rank_score(ai["confidence"], ev["close"], ai["target_price"])
             ai_picks.append({"mode": "ai", "conf": ai["confidence"], "c": c, "ev": ev,
@@ -246,12 +246,38 @@ def main():
     ai_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
     final_picks = ai_picks  # 개수 상한 없음: AI가 승인한 만큼(목표 약 10개, 많으면 더/적으면 덜)
 
+    # 최소 보장: 확정 승인이 MIN_DAILY_PICKS(3)개 미만이면, PASS 판정을 받았더라도
+    # 그중 AI 신뢰도가 가장 높았던 근접 종목을 '승격 신호'로 채워 넣는다.
+    # (모의매매가 매일 최소한의 데이터를 쌓을 수 있도록. 단, 완전승인과는 명확히 구분 표시)
+    MIN_DAILY_PICKS = 3
+    if len(final_picks) < MIN_DAILY_PICKS and all_reviewed:
+        picked_codes = {p["c"]["code"] for p in final_picks}
+        fillers = [w for w in all_reviewed if w["c"]["code"] not in picked_codes]
+        fillers.sort(key=lambda x: x["ai"]["confidence"], reverse=True)
+        needed = MIN_DAILY_PICKS - len(final_picks)
+        for w in fillers[:needed]:
+            ai = w["ai"]
+            ev = w["ev"]
+            rule_tp = common.price_targets(ev["close"], ev["atr14"], "BUY")
+            tp_check = {"entry": ev["close"], "target": ai["target_price"]}
+            ai_target_valid = ai["target_price"] > ev["close"] and common.meets_min_return(tp_check)
+            target_price = ai["target_price"] if ai_target_valid else rule_tp["target"]
+            promoted_tp = {"entry": ev["close"], "target": target_price,
+                           "stop": rule_tp["stop"], "risk_reward": "1:2"}
+            rs = common.rank_score(ai["confidence"], ev["close"], target_price)
+            final_picks.append({"mode": "promoted", "conf": ai["confidence"], "c": w["c"], "ev": ev,
+                                 "tp": promoted_tp, "ai": ai, "news": w["news"], "rank": rs})
+        final_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
+        print(f"[최소보장] 확정승인 부족으로 {min(needed, len(fillers))}개 근접종목을 승격신호로 추가")
+
     # 모의매매용: 오늘 승인된 픽을 저장 (paper_buy.py가 실제 시가로 가상매수할 때 사용)
     today_picks = [{
         "code": p["c"]["code"], "name": p["c"]["name"],
-        "stop_price": p["tp"]["stop"], "target_price": (p["ai"]["target_price"] if p["mode"] == "ai" else p["tp"]["target"]),
-        "target_days": (p["ai"]["target_days"] if p["mode"] == "ai" else 1),
+        "stop_price": p["tp"]["stop"],
+        "target_price": (p["ai"]["target_price"] if p["mode"] == "ai" else p["tp"]["target"]),
+        "target_days": (p["ai"]["target_days"] if p["mode"] in ("ai", "promoted") else 1),
         "rank_score": p["rank"]["score"],
+        "promoted": p["mode"] == "promoted",
     } for p in final_picks]
     common.save_json("today_picks.json", {"date": now.strftime("%Y-%m-%d"), "picks": today_picks})
 
@@ -260,6 +286,8 @@ def main():
             c, ev = p["c"], p["ev"]
             if p["mode"] == "ai":
                 body = ai_judge.format_ai_alert(c["code"], c["name"], ev, p["ai"], p["news"], p["rank"])
+            elif p["mode"] == "promoted":
+                body = ai_judge.format_promoted_alert(c["code"], c["name"], ev, p["ai"], p["news"], p["tp"], p["rank"])
             else:
                 body = common.format_alert(c["code"], c["name"], ev, p["tp"], p["rank"])
             msg = f"[오늘의 매수 후보 {rank_no}/{len(final_picks)} · 종합점수 {p['rank']['score']}점]\n" + body

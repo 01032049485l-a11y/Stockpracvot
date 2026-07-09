@@ -290,6 +290,36 @@ def reevaluate_position(code: str, name: str, entry_price: float, current_price:
         return None
 
 
+def format_promoted_alert(code: str, name: str, ev: dict, ai: dict, news: list, tp: dict, rank: dict = None) -> str:
+    """확정 승인이 부족해 '최소 보장' 규칙으로 승격된 신호. 완전승인과 시각적으로 명확히 구분."""
+    reasons_lines = "\n".join(f"  {i+1}. {r}" for i, r in enumerate(ai["reasons"]))
+    news_lines = "\n".join(f"  · {n['title']}" for n in news[:3]) if news else "  · (관련 뉴스 없음)"
+    ret_pct = expected_return_pct_local(ev["close"], tp["target"])
+    rank_line = f"종합순위 점수: {rank['score']}점\n" if rank else ""
+    return (
+        f"<b>🟡 조건근접 승격 신호 (최소보장, 완전승인 아님)</b>\n"
+        f"종목: <b>{name}</b> ({code})\n"
+        f"현재가: {ev['close']:,.0f}원\n"
+        f"목표매도가: {tp['target']:,}원 (예상 수익률 +{ret_pct:.1f}%)  손절가: {tp['stop']:,}원\n"
+        f"AI 신뢰도: {ai['confidence']}%   (매수신호 기준선 70%에는 못 미쳤으나, 오늘 최소 3종목 보장을 위해 근접 순위로 승격됨)\n"
+        f"{rank_line}"
+        f"\n"
+        f"📌 판단 근거 (AI 원래 판단: {ai['decision']})\n"
+        f"{ai['summary']}\n"
+        f"{reasons_lines}\n"
+        f"\n"
+        f"참고 뉴스:\n{news_lines}\n"
+        f"─────────────\n"
+        f"※ 확신도가 상대적으로 낮은 신호입니다. 다른 완전승인 신호보다 신중하게 판단하세요."
+    )
+
+
+def expected_return_pct_local(entry: float, target: float) -> float:
+    if not entry:
+        return 0.0
+    return (target - entry) / entry * 100
+
+
 def format_ai_alert(code: str, name: str, ev: dict, ai: dict, news: list, rank: dict = None) -> str:
     reasons_lines = "\n".join(f"  {i+1}. {r}" for i, r in enumerate(ai["reasons"]))
     news_lines = "\n".join(f"  · {n['title']}" for n in news[:3]) if news else "  · (관련 뉴스 없음)"
