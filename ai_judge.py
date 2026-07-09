@@ -55,7 +55,9 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list) -> str:
     news_block = "\n".join(f"- {n['title']} ({n['date']})" for n in news) if news else "(관련 뉴스 없음)"
     return f"""당신은 신중한 국내주식 단기 스윙 트레이딩 애널리스트입니다.
 아래는 기술적 지표 기반 시스템이 1차로 걸러낸 매수 후보 종목입니다.
-기술적 신호와 최근 뉴스를 함께 검토해서, 오늘 아침 실제로 매수할 가치가 있는지 최종 판단해주세요.
+기술적 신호, 최근 뉴스, 그리고 당신이 알고 있는 해당 종목/업종/시장 관련
+다른 유효한 정보(업황, 경쟁사 동향, 최근 실적 흐름, 거시 환경 등)까지 폭넓게
+종합해서, 오늘 아침 실제로 매수할 가치가 있는지 최종 판단해주세요.
 
 [종목] {name} ({code})
 [현재가] {ev['close']:,.0f}원
@@ -72,11 +74,22 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list) -> str:
 - 뉴스에 악재(실적 부진, 소송, 규제, 경영진 리스크 등)가 있으면 기술적 신호가 좋아도 PASS
 - 뉴스가 중립/무관하면 기술적 신호를 신뢰
 - 뉴스가 명확한 호재(신규 계약, 실적 서프라이즈, 정책 수혜 등)면 confidence를 높여도 됨
-- target_days는 스윙 트레이딩 기준 통상 3~20 거래일 사이로, 뉴스와 기술적 추세 강도를 고려해 판단
-- target_price는 규칙기반 목표가를 참고하되, 뉴스 재료가 강하면 소폭 상향 조정 가능(과도한 낙관 금지)
+- 뉴스 외에도 업황, 경쟁사 상황, 최근 실적 추이, 거시경제(금리/환율 등)처럼
+  당신이 알고 있는 관련 정보가 있다면 반드시 판단에 반영하세요
+- target_days는 스윙 트레이딩 기준 통상 3~20 거래일 사이로, 판단한 근거들의 강도를 고려해 산정
+- target_price는 규칙기반 목표가를 참고하되, 재료가 강하면 소폭 상향 조정 가능(과도한 낙관 금지)
+
+판단에 사용한 근거는 "reasons" 배열에 항목별로 나눠 담아주세요. 각 항목은:
+- 15~40자 내외로 간결하게, 어떤 요인인지 앞에 태그를 붙여서 작성
+  (예: "[기술적] 골든크로스와 거래량 급증 동반", "[뉴스] 2분기 실적 서프라이즈 발표",
+   "[업황] 반도체 업사이클 진입 국면", "[리스크] 밸류에이션 부담 존재" 등)
+- 매수(BUY) 판단이면 근거가 되는 긍정 요인 위주로 3~5개
+- 반려(PASS) 판단이면 반려 사유가 되는 요인 위주로 2~4개
+- 근거는 반드시 위에 제시된 기술적 지표/뉴스 내용 또는 당신이 실제로 알고 있는
+  사실에 기반해야 하며, 확인되지 않은 내용을 지어내지 마세요
 
 반드시 아래 JSON 형식으로만 답하세요. 다른 설명 텍스트는 절대 포함하지 마세요:
-{{"decision": "BUY 또는 PASS", "target_price": 정수, "target_days": 정수, "confidence": 0~100 정수, "reason": "한국어로 2문장 이내 판단 근거"}}"""
+{{"decision": "BUY 또는 PASS", "target_price": 정수, "target_days": 정수, "confidence": 0~100 정수, "summary": "한 줄 종합 요약(30자 내외)", "reasons": ["근거1", "근거2", "근거3"]}}"""
 
 
 def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list) -> dict | None:
@@ -110,9 +123,11 @@ def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list) -> dict | N
         text = re.sub(r"```$", "", text).strip()
         parsed = json.loads(text)
         # 필수 필드 검증
-        for f in ("decision", "target_price", "target_days", "confidence", "reason"):
+        for f in ("decision", "target_price", "target_days", "confidence", "summary", "reasons"):
             if f not in parsed:
                 return None
+        if not isinstance(parsed["reasons"], list) or not parsed["reasons"]:
+            return None
         return parsed
     except Exception as e:
         print(f"  [경고] AI 판단 파싱 실패: {e}")
@@ -120,6 +135,7 @@ def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list) -> dict | N
 
 
 def format_ai_alert(code: str, name: str, ev: dict, ai: dict, news: list) -> str:
+    reasons_lines = "\n".join(f"  {i+1}. {r}" for i, r in enumerate(ai["reasons"]))
     news_lines = "\n".join(f"  · {n['title']}" for n in news[:3]) if news else "  · (관련 뉴스 없음)"
     return (
         f"<b>🤖 AI 종합 매수 신호</b>\n"
@@ -128,8 +144,12 @@ def format_ai_alert(code: str, name: str, ev: dict, ai: dict, news: list) -> str
         f"AI 목표매도가: {ai['target_price']:,}원\n"
         f"예상 도달 기간: 약 {ai['target_days']}거래일 이내\n"
         f"AI 신뢰도: {ai['confidence']}%   (기술적 신뢰도 {ev['confidence']*100:.0f}%)\n"
-        f"판단 근거: {ai['reason']}\n"
+        f"\n"
+        f"📌 왜 오를 것으로 판단했나\n"
+        f"{ai['summary']}\n"
+        f"{reasons_lines}\n"
+        f"\n"
         f"참고 뉴스:\n{news_lines}\n"
         f"─────────────\n"
-        f"※ AI의 뉴스/지표 종합 추정치이며 투자 권유가 아닙니다."
+        f"※ AI가 뉴스·지표·업황 등을 종합한 추정치이며 투자 권유가 아닙니다."
     )

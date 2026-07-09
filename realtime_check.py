@@ -112,7 +112,7 @@ def main():
         ai = ai_judge.ai_analyze(code, name, ev, tp, news)
 
         if ai is not None and ai["decision"] != "BUY":
-            print(f"  [AI 반려] {name}({code}) - {ai.get('reason','')[:60]}")
+            print(f"  [AI 반려] {name}({code}) - {ai.get('summary','')[:60]}")
             alerted[key] = now_kst().isoformat()  # 같은 신호 반복 재검토 방지
             continue
 
