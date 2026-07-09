@@ -96,6 +96,7 @@ def main():
 
     print("[2/2] 뉴스 재수집 + AI 재판단 중...")
     ai_picks = []
+    all_reviewed = []
     for conf, c, ev, tp in picks:
         news = ai_judge.fetch_news(c["name"])
         fundamentals = ai_judge.fetch_fundamentals(c["code"])
@@ -106,6 +107,7 @@ def main():
             ai_picks.append({"mode": "rule", "conf": conf, "c": c, "ev": ev, "tp": tp})
             continue
         print(f"  {c['name']}: AI={ai['decision']} (신뢰도 {ai['confidence']}%)")
+        all_reviewed.append({"c": c, "ev": ev, "ai": ai, "news": news})
         if ai["decision"] == "BUY":
             ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
             if not common.meets_min_return(ai_tp_check):
@@ -123,10 +125,20 @@ def main():
     final_picks = ai_picks  # 개수 상한 없음
 
     if not final_picks:
-        common.send_telegram(
-            "📋 [오후 재점검] 오전장 흐름을 반영해도 AI 검토를 통과한 매수 신호가 없습니다."
-        )
-        print("\n[완료] 알릴 신호 없음")
+        if all_reviewed:
+            all_reviewed.sort(key=lambda x: x["ai"]["confidence"], reverse=True)
+            common.send_telegram(
+                "📋 [오후 재점검] 확신 있는 매수 신호는 없습니다.\n"
+                "대신 오전장 기준 근접했던 종목을 참고용으로 보여드릴게요 (매수 추천 아님)."
+            )
+            for w in all_reviewed[:3]:
+                body = ai_judge.format_watchlist_alert(w["c"]["code"], w["c"]["name"], w["ev"], w["ai"], w["news"])
+                common.send_telegram(body)
+        else:
+            common.send_telegram(
+                "📋 [오후 재점검] 오전장 흐름을 반영해도 1차 조건을 만족한 종목이 없습니다."
+            )
+        print("\n[완료] 확정 신호 없음")
         return
 
     for rank_no, p in enumerate(final_picks, 1):

@@ -202,6 +202,28 @@ def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list,
         return None
 
 
+def format_watchlist_alert(code: str, name: str, ev: dict, ai: dict, news: list) -> str:
+    """확정 매수신호가 하루 종일 하나도 없을 때, 그나마 근접했던 종목을
+    '참고용 관찰종목'으로 명확히 구분해서 보여주는 포맷. 매수 추천이 아님을 강조."""
+    reasons_lines = "\n".join(f"  {i+1}. {r}" for i, r in enumerate(ai["reasons"]))
+    news_lines = "\n".join(f"  · {n['title']}" for n in news[:3]) if news else "  · (관련 뉴스 없음)"
+    return (
+        f"<b>🔎 참고용 관찰종목 (매수 신호 아님)</b>\n"
+        f"종목: <b>{name}</b> ({code})\n"
+        f"현재가: {ev['close']:,.0f}원\n"
+        f"AI 신뢰도: {ai['confidence']}%   (매수신호 기준선 70%에는 미달)\n"
+        f"AI 판단: {ai['decision']}\n"
+        f"\n"
+        f"📌 이 종목이 그나마 근접했던 이유 / 아쉬웠던 점\n"
+        f"{ai['summary']}\n"
+        f"{reasons_lines}\n"
+        f"\n"
+        f"참고 뉴스:\n{news_lines}\n"
+        f"─────────────\n"
+        f"※ 확신 있는 매수신호가 아닌 참고용 정보입니다. 매수 권유가 아닙니다."
+    )
+
+
 def format_ai_alert(code: str, name: str, ev: dict, ai: dict, news: list, rank: dict = None) -> str:
     reasons_lines = "\n".join(f"  {i+1}. {r}" for i, r in enumerate(ai["reasons"]))
     news_lines = "\n".join(f"  · {n['title']}" for n in news[:3]) if news else "  · (관련 뉴스 없음)"

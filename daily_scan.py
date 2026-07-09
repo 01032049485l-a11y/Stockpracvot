@@ -216,6 +216,7 @@ def main():
     # 2단계: 뉴스 + 재무지표 + 실적뉴스 수집 후 AI 종합 판단 (시장 전체 심리 포함)
     print(f"\n[AI 검토] 규칙기반 후보 {len(picks)}개에 대해 뉴스/재무/실적 수집 + AI 판단 중...")
     ai_picks = []
+    all_reviewed = []  # PASS 포함 전체 AI 검토 결과 (확정 픽이 0개일 때 근접 관찰종목 후보로 사용)
     for conf, c, ev, tp in picks:
         news = ai_judge.fetch_news(c["name"])
         fundamentals = ai_judge.fetch_fundamentals(c["code"])
@@ -227,6 +228,7 @@ def main():
             ai_picks.append({"mode": "rule", "conf": conf, "c": c, "ev": ev, "tp": tp})
             continue
         print(f"  {c['name']}: AI={ai['decision']} (신뢰도 {ai['confidence']}%)")
+        all_reviewed.append({"c": c, "ev": ev, "ai": ai, "news": news})
         if ai["decision"] == "BUY":
             ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
             if not common.meets_min_return(ai_tp_check):
@@ -244,16 +246,29 @@ def main():
     ai_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
     final_picks = ai_picks  # 개수 상한 없음: AI가 승인한 만큼(목표 약 10개, 많으면 더/적으면 덜)
 
-    if not final_picks:
-        common.send_telegram("📋 오늘 아침 기준, AI 검토를 통과한 매수 신호가 없습니다.\n장중에 조건이 확정되면 알림을 보내드릴게요.")
-    for rank_no, p in enumerate(final_picks, 1):
-        c, ev = p["c"], p["ev"]
-        if p["mode"] == "ai":
-            body = ai_judge.format_ai_alert(c["code"], c["name"], ev, p["ai"], p["news"], p["rank"])
-        else:
-            body = common.format_alert(c["code"], c["name"], ev, p["tp"], p["rank"])
-        msg = f"[오늘의 매수 후보 {rank_no}/{len(final_picks)} · 종합점수 {p['rank']['score']}점]\n" + body
-        common.send_telegram(msg)
+    if final_picks:
+        for rank_no, p in enumerate(final_picks, 1):
+            c, ev = p["c"], p["ev"]
+            if p["mode"] == "ai":
+                body = ai_judge.format_ai_alert(c["code"], c["name"], ev, p["ai"], p["news"], p["rank"])
+            else:
+                body = common.format_alert(c["code"], c["name"], ev, p["tp"], p["rank"])
+            msg = f"[오늘의 매수 후보 {rank_no}/{len(final_picks)} · 종합점수 {p['rank']['score']}점]\n" + body
+            common.send_telegram(msg)
+    elif all_reviewed:
+        # 확정 매수신호가 하루 종일 0개 -> 그나마 신뢰도가 높았던 근접 종목을 참고용으로 발송
+        all_reviewed.sort(key=lambda x: x["ai"]["confidence"], reverse=True)
+        top_watch = all_reviewed[:3]
+        common.send_telegram(
+            "📋 오늘 아침 기준, 확신 있는 매수 신호는 없습니다.\n"
+            "대신 그나마 신뢰도가 높았던 근접 종목을 참고용으로 보여드릴게요 "
+            "(매수 추천 아님)."
+        )
+        for w in top_watch:
+            body = ai_judge.format_watchlist_alert(w["c"]["code"], w["c"]["name"], w["ev"], w["ai"], w["news"])
+            common.send_telegram(body)
+    else:
+        common.send_telegram("📋 오늘 아침 기준, 기술적 1차 조건을 만족한 종목조차 없습니다.\n장중에 조건이 바뀌면 알림을 보내드릴게요.")
 
 
 if __name__ == "__main__":
