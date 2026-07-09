@@ -9,6 +9,7 @@ daily_scan.py (v2) - 장 시작 전 1회 실행
 """
 import sys
 import time
+import concurrent.futures as cf
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -22,7 +23,7 @@ KST = ZoneInfo("Asia/Seoul")
 CANDIDATE_MAX = 80
 CANDIDATES_FILE = "candidates.json"
 MIN_ROWS = 65          # 지표 계산 최소 거래일
-REQ_SLEEP = 0.03       # 요청 간격 (서버 배려)
+MAX_WORKERS = 20       # 동시 요청 수 (서버 차단 방지를 위해 20으로 제한)
 
 
 def get_ticker_list() -> pd.DataFrame:
@@ -108,36 +109,47 @@ def main():
     tickers = get_ticker_list()
     print(f"  -> {len(tickers)}개 종목")
 
-    print("[2/2] 종목별 시세 수집 + 지표 분석 중... (10~30분 소요)")
+    print(f"[2/2] 종목별 시세 수집 + 지표 분석 중... (동시 {MAX_WORKERS}건, 5~15분 소요)")
     candidates = []
     n_ok = 0
-    for i, row in tickers.iterrows():
-        code, name = row["Code"], row["Name"]
-        df = fetch_history(code, start)
-        time.sleep(REQ_SLEEP)
-        if df is None:
-            continue
-        n_ok += 1
+    n_done = 0
+    total = len(tickers)
+    code_name = {row["Code"]: row["Name"] for _, row in tickers.iterrows()}
 
-        ind = common.add_indicators(df)
-        ev = common.evaluate(ind)
+    def task(code):
+        return code, fetch_history(code, start)
 
-        is_confirmed = ev["verdict"] == "BUY"
-        is_near = (not is_confirmed) and ev["score"] >= 2.0 and ev["trend"] == "상승추세"
-        if not (is_confirmed or is_near):
-            continue
+    with cf.ThreadPoolExecutor(max_workers=MAX_WORKERS) as ex:
+        futures = [ex.submit(task, code) for code in code_name]
+        for fut in cf.as_completed(futures):
+            n_done += 1
+            if n_done % 300 == 0:
+                print(f"  진행: {n_done}/{total} (데이터 확보 {n_ok}, 후보 {len(candidates)})")
+            try:
+                code, df = fut.result()
+            except Exception:
+                continue
+            if df is None:
+                continue
+            n_ok += 1
+            name = code_name[code]
 
-        candidates.append({
-            "code": code,
-            "name": name,
-            "verdict": ev["verdict"],
-            "score": ev["score"],
-            "trend": ev["trend"],
-            "history": df.tail(100).to_dict("records"),
-        })
+            ind = common.add_indicators(df)
+            ev = common.evaluate(ind)
 
-        if (i + 1) % 300 == 0:
-            print(f"  진행: {i+1}/{len(tickers)} (데이터 확보 {n_ok}, 후보 {len(candidates)})")
+            is_confirmed = ev["verdict"] == "BUY"
+            is_near = (not is_confirmed) and ev["score"] >= 2.0 and ev["trend"] == "상승추세"
+            if not (is_confirmed or is_near):
+                continue
+
+            candidates.append({
+                "code": code,
+                "name": name,
+                "verdict": ev["verdict"],
+                "score": ev["score"],
+                "trend": ev["trend"],
+                "history": df.tail(100).to_dict("records"),
+            })
 
     candidates.sort(key=lambda c: abs(c["score"]), reverse=True)
     candidates = candidates[:CANDIDATE_MAX]
