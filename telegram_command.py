@@ -50,19 +50,34 @@ def get_updates(offset: int) -> list:
     url = f"https://api.telegram.org/bot{token}/getUpdates"
     try:
         r = requests.get(url, params={"offset": offset, "timeout": 0}, timeout=15)
+        print(f"[진단] getUpdates 응답 코드: {r.status_code}")
         if r.status_code != 200:
-            print(f"[경고] getUpdates 실패 {r.status_code}: {r.text[:200]}")
+            print(f"[경고] getUpdates 실패 {r.status_code}: {r.text[:300]}")
             return []
-        return r.json().get("result", [])
+        result = r.json().get("result", [])
+        print(f"[진단] 조회된 업데이트 개수: {len(result)} (offset={offset})")
+        return result
     except Exception as e:
         print(f"[경고] getUpdates 예외: {e}")
         return []
 
 
+def matches(text: str, keywords: set) -> bool:
+    """정확히 일치하거나, 메시지 안에 키워드가 포함되어 있으면 매칭 (공백/문장부호에 관대하게)"""
+    t = text.strip().lower()
+    if t in keywords:
+        return True
+    return any(kw.lower() in t for kw in keywords)
+
+
 def main():
     my_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    print(f"[진단] TELEGRAM_BOT_TOKEN 존재: {bool(token)}, TELEGRAM_CHAT_ID: {my_chat_id}")
+
     state = common.load_json(OFFSET_FILE, {"offset": 0})
     offset = state.get("offset", 0)
+    print(f"[진단] 현재 저장된 offset: {offset}")
 
     updates = get_updates(offset)
     if not updates:
@@ -74,26 +89,28 @@ def main():
         max_update_id = max(max_update_id, upd.get("update_id", 0))
         msg = upd.get("message") or upd.get("edited_message")
         if not msg:
+            print(f"[진단] message 필드 없는 업데이트 (예: 콜백 등): {upd}")
             continue
         chat_id = str(msg.get("chat", {}).get("id", ""))
         text = (msg.get("text") or "").strip()
+        print(f"[진단] 수신 메시지: chat_id={chat_id}, text='{text}'")
 
         if my_chat_id and chat_id != str(my_chat_id):
-            print(f"[무시] 등록된 채팅이 아님 (chat_id={chat_id})")
+            print(f"[무시] 등록된 채팅({my_chat_id})이 아님 (수신 chat_id={chat_id})")
             continue
 
-        text_norm = text.lower()
-        if text_norm in STATUS_KEYWORDS or text in STATUS_KEYWORDS:
+        if matches(text, STATUS_KEYWORDS):
             print(f"[명령어] 상태조회 요청: {text}")
             status_msg = pt.build_status_message(get_current_price)
             common.send_telegram(status_msg)
-        elif text_norm in HELP_KEYWORDS or text in HELP_KEYWORDS:
+        elif matches(text, HELP_KEYWORDS):
             print(f"[명령어] 도움말 요청: {text}")
             common.send_telegram(HELP_TEXT)
         else:
             print(f"[무시] 인식되지 않는 메시지: {text[:50]}")
 
     common.save_json(OFFSET_FILE, {"offset": max_update_id + 1})
+    print(f"[진단] offset을 {max_update_id + 1}로 갱신함")
 
 
 if __name__ == "__main__":
