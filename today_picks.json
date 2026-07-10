@@ -1,0 +1,41 @@
+{
+  "date": "2026-07-10",
+  "picks": [
+    {
+      "code": "082210",
+      "name": "옵트론텍",
+      "stop_price": 1600,
+      "target_price": 2150,
+      "target_days": 3,
+      "rank_score": 66.1,
+      "promoted": false
+    },
+    {
+      "code": "061090",
+      "name": "세나테크놀로지",
+      "stop_price": 40912,
+      "target_price": 49500,
+      "target_days": 2,
+      "rank_score": 57.1,
+      "promoted": false
+    },
+    {
+      "code": "267980",
+      "name": "매일유업",
+      "stop_price": 33850,
+      "target_price": 37000,
+      "target_days": 2,
+      "rank_score": 50.1,
+      "promoted": false
+    },
+    {
+      "code": "014710",
+      "name": "사조씨푸드",
+      "stop_price": 8556,
+      "target_price": 9850,
+      "target_days": 2,
+      "rank_score": 49.5,
+      "promoted": false
+    }
+  ]
+}
