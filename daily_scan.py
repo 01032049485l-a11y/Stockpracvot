@@ -236,8 +236,9 @@ def main():
         news = ai_judge.fetch_news(c["name"])
         fundamentals = ai_judge.fetch_fundamentals(c["code"])
         earnings_news = ai_judge.fetch_earnings_news(c["name"])
+        investor_flow = ai_judge.fetch_investor_flow(c["code"])
         ai = ai_judge.ai_analyze(c["code"], c["name"], ev, tp, news,
-                                  fundamentals, earnings_news, market_sentiment)
+                                  fundamentals, earnings_news, market_sentiment, investor_flow)
         if ai is None:
             # AI 판단 실패 -> 더 이상 규칙기반으로 자동승인하지 않음 (뉴스/재무 검증 없이
             # 기술지표만으로 신호를 내보내는 것은 정확도를 떨어뜨리므로 그냥 제외한다)

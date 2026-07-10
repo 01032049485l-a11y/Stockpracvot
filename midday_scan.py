@@ -113,8 +113,9 @@ def main():
         news = ai_judge.fetch_news(c["name"])
         fundamentals = ai_judge.fetch_fundamentals(c["code"])
         earnings_news = ai_judge.fetch_earnings_news(c["name"])
+        investor_flow = ai_judge.fetch_investor_flow(c["code"])
         ai = ai_judge.ai_analyze(c["code"], c["name"], ev, tp, news,
-                                  fundamentals, earnings_news, market_sentiment)
+                                  fundamentals, earnings_news, market_sentiment, investor_flow)
         if ai is None:
             ai_failures += 1
             continue

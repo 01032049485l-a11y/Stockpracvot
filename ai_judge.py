@@ -81,15 +81,84 @@ def fetch_earnings_news(stock_name: str, display: int = 3) -> list:
     return fetch_news(f"{stock_name} 실적", display=display)
 
 
+FRGN_URL = "https://finance.naver.com/item/frgn.naver"
+
+
+def fetch_investor_flow(code: str, days: int = 5) -> dict:
+    """네이버 금융의 종목별 기관/외국인 순매매 페이지에서 최근 며칠간 수급을 가져온다.
+    실패하면 빈 dict 반환 (프롬프트에서 '데이터 없음' 처리).
+    페이지 구조가 바뀌면 파싱이 깨질 수 있어 매우 방어적으로 작성함."""
+    try:
+        r = requests.get(FRGN_URL, params={"code": code},
+                          headers={"User-Agent": "Mozilla/5.0"}, timeout=8)
+        if r.status_code != 200:
+            return {}
+        html_text = r.text
+    except Exception:
+        return {}
+
+    try:
+        # 데이터 테이블의 숫자 셀들은 <span> 안에 들어있고, 행마다 9개 값
+        # [날짜, 종가, 전일비, 등락률, 거래량, 기관순매매량, 외국인순매매량, 외국인보유주식수, 외국인보유율]
+        cells = re.findall(r'<span[^>]*>\s*([\-\+0-9,\.%]+)\s*</span>', html_text)
+        rows = []
+        for i in range(0, len(cells) - 8, 9):
+            chunk = cells[i:i+9]
+            date_s = chunk[0]
+            if not re.match(r"\d{4}\.\d{2}\.\d{2}", date_s):
+                continue
+            def to_num(s):
+                s = s.replace(",", "").replace("%", "")
+                try:
+                    return int(s)
+                except ValueError:
+                    try:
+                        return float(s)
+                    except ValueError:
+                        return None
+            inst_net = to_num(chunk[5])
+            foreign_net = to_num(chunk[6])
+            if inst_net is None or foreign_net is None:
+                continue
+            rows.append({"date": date_s, "inst_net": inst_net, "foreign_net": foreign_net})
+            if len(rows) >= days:
+                break
+
+        if not rows:
+            return {}
+
+        return {
+            "latest_date": rows[0]["date"],
+            "latest_inst_net": rows[0]["inst_net"],
+            "latest_foreign_net": rows[0]["foreign_net"],
+            "cum_inst_net": sum(r["inst_net"] for r in rows),
+            "cum_foreign_net": sum(r["foreign_net"] for r in rows),
+            "days": len(rows),
+        }
+    except Exception:
+        return {}
+
+
 def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list,
                    fundamentals: dict = None, earnings_news: list = None,
-                   market_sentiment: dict = None) -> str:
+                   market_sentiment: dict = None, investor_flow: dict = None) -> str:
     fundamentals = fundamentals or {}
     earnings_news = earnings_news or []
     news_block = "\n".join(f"- {n['title']} ({n['date']})" for n in news) if news else "(관련 뉴스 없음)"
     earnings_block = "\n".join(f"- {n['title']} ({n['date']})" for n in earnings_news) if earnings_news else "(관련 실적 뉴스 없음)"
     per = fundamentals.get("per", "N/A")
     pbr = fundamentals.get("pbr", "N/A")
+
+    if investor_flow:
+        flow_block = (
+            f"[수급 - 최근 {investor_flow['days']}거래일 기관/외국인 순매매 (주식수 기준)]\n"
+            f"- 최근일({investor_flow['latest_date']}): 기관 {investor_flow['latest_inst_net']:+,}주 / "
+            f"외국인 {investor_flow['latest_foreign_net']:+,}주\n"
+            f"- {investor_flow['days']}일 누적: 기관 {investor_flow['cum_inst_net']:+,}주 / "
+            f"외국인 {investor_flow['cum_foreign_net']:+,}주\n"
+        )
+    else:
+        flow_block = "[수급] 데이터 없음\n"
 
     if market_sentiment:
         sentiment_block = (
@@ -126,6 +195,7 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list,
 {chr(10).join('- ' + r for r in ev['reasons'])}
 [규칙기반 목표가] {tp['target']:,}원 / 손절가 {tp['stop']:,}원
 
+{flow_block}
 {sentiment_block}
 [최근 뉴스 헤드라인]
 {news_block}
@@ -134,6 +204,9 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list,
 {earnings_block}
 
 다음 기준으로 신중하게 판단하세요:
+- 외국인과 기관이 동반 순매수(둘 다 플러스) 중이면 강한 긍정 신호로 취급하고 confidence를 높일 수 있습니다
+- 외국인과 기관이 동반 순매도(둘 다 마이너스) 중이면 기술적 신호가 좋아도 신중하게 접근하거나 PASS 하세요 (개인만 사는 상승은 지속력이 약한 경우가 많음)
+- 수급 데이터가 없으면 이 조건은 건너뛰세요
 - 뉴스에 악재(실적 부진, 소송, 규제, 경영진 리스크 등)가 있으면 기술적 신호가 좋아도 PASS
 - PER/PBR이 동종업계 대비 지나치게 고평가된 상태라면(당신의 지식 기준으로 판단) 신중하게 접근하고 confidence를 낮추세요. 밸류에이션 데이터가 N/A이면 이 조건은 건너뛰세요
 - 실적/컨퍼런스콜 뉴스에 가이던스 하향, 어닝 쇼크 등이 있으면 기술적 신호와 무관하게 PASS
@@ -149,7 +222,8 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list,
 판단에 사용한 근거는 "reasons" 배열에 항목별로 나눠 담아주세요. 각 항목은:
 - 15~40자 내외로 간결하게, 어떤 요인인지 앞에 태그를 붙여서 작성
   (예: "[기술적] 골든크로스와 거래량 급증 동반", "[밸류에이션] PER 업종 평균 하회",
-   "[실적] 컨센서스 상회 어닝 서프라이즈", "[시장심리] 과열 국면으로 단기 조정 유의",
+   "[수급] 외국인·기관 5일 연속 동반 순매수", "[실적] 컨센서스 상회 어닝 서프라이즈",
+   "[시장심리] 과열 국면으로 단기 조정 유의",
    "[업황] 반도체 업사이클 진입 국면", "[리스크] 밸류에이션 부담 존재" 등)
 - 매수(BUY) 판단이면 근거가 되는 긍정 요인 위주로 3~5개
 - 반려(PASS) 판단이면 반려 사유가 되는 요인 위주로 2~4개
@@ -162,14 +236,14 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list,
 
 def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list,
                 fundamentals: dict = None, earnings_news: list = None,
-                market_sentiment: dict = None) -> dict | None:
+                market_sentiment: dict = None, investor_flow: dict = None) -> dict | None:
     """Claude API 호출. 실패하거나 파싱 안 되면 None 반환 (호출부에서 스킵 처리)."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         print("  [경고] ANTHROPIC_API_KEY가 없어 AI 판단을 건너뜁니다.")
         return None
 
-    prompt = _build_prompt(code, name, ev, tp, news, fundamentals, earnings_news, market_sentiment)
+    prompt = _build_prompt(code, name, ev, tp, news, fundamentals, earnings_news, market_sentiment, investor_flow)
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",

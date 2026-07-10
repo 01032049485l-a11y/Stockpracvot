@@ -115,8 +115,9 @@ def main():
         news = ai_judge.fetch_news(name)
         fundamentals = ai_judge.fetch_fundamentals(code)
         earnings_news = ai_judge.fetch_earnings_news(name)
+        investor_flow = ai_judge.fetch_investor_flow(code)
         ai = ai_judge.ai_analyze(code, name, ev, tp, news,
-                                  fundamentals, earnings_news, market_sentiment)
+                                  fundamentals, earnings_news, market_sentiment, investor_flow)
 
         if ai is None:
             print(f"  [AI 실패] {name}({code}) - 뉴스/재무 검증 없이는 신호를 보내지 않습니다.")
