@@ -1,20 +1,19 @@
-name: Daily Full Market Scan
+name: Midday Recheck
 
 on:
   schedule:
-    # 매 평일 한국시간 08:07 (UTC 23:07 전날) - 장 시작 전 전체 스캔
-    # + 08:37 백업 트리거 (GitHub의 정각 부하로 스케줄이 누락될 경우 대비, 이미 실행됐으면 자동으로 건너뜀)
-    - cron: '7 23 * * 0-4'
-    - cron: '37 23 * * 0-4'
-  workflow_dispatch: {}   # 수동 실행 버튼
+    # 매 평일 한국시간 낮 12:33 (UTC 03:33) + 13:03 백업 트리거
+    - cron: '33 3 * * 1-5'
+    - cron: '3 4 * * 1-5'
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
 jobs:
-  scan:
+  midday:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
 
@@ -25,19 +24,19 @@ jobs:
       - name: Install dependencies
         run: pip install finance-datareader pandas numpy requests
 
-      - name: Run daily scan
+      - name: Run midday scan
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           NAVER_CLIENT_ID: ${{ secrets.NAVER_CLIENT_ID }}
           NAVER_CLIENT_SECRET: ${{ secrets.NAVER_CLIENT_SECRET }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: python daily_scan.py
+        run: python midday_scan.py
 
-      - name: Commit candidates
+      - name: Commit marker
         run: |
           git config user.name "stockbot"
           git config user.email "stockbot@users.noreply.github.com"
-          git add candidates.json today_picks.json
-          git commit -m "daily scan $(date +%F)" || echo "no changes"
-          git push
+          git add midday_marker.json || true
+          git commit -m "midday scan $(date +%F)" || echo "no changes"
+          git push || true
