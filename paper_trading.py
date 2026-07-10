@@ -130,3 +130,60 @@ def format_daily_report(p: dict, date: str) -> str:
         f"현재 총자산: {p['cash']:,.0f}원 (시작 {TOTAL_CAPITAL:,}원 대비 {p['cash']-TOTAL_CAPITAL:+,}원)\n"
         f"\n{lines}"
     )
+
+
+def build_status_message(get_current_price_fn) -> str:
+    """현재 포트폴리오 상황 메시지를 만든다.
+    get_current_price_fn(code) -> float | None 형태의 현재가 조회 함수를 주입받는다
+    (paper_status.py, telegram_command.py가 동일 로직을 공유하기 위함)."""
+    p = load_portfolio()
+    today = today_str()
+
+    lines = [f"<b>🔍 모의매매 현재 상황</b> ({now_kst().strftime('%Y-%m-%d %H:%M')} 기준)"]
+    lines.append(f"현금: {p['cash']:,.0f}원")
+
+    if p["positions"]:
+        lines.append(f"\n<b>보유 중 ({len(p['positions'])}종목)</b>")
+        for code, pos in p["positions"].items():
+            cur = get_current_price_fn(code)
+            if cur is None:
+                lines.append(f"  · {pos['name']}: 현재가 조회 실패")
+                continue
+            unrealized = (cur - pos["entry_price"]) * pos["shares"]
+            unrealized_pct = (cur - pos["entry_price"]) / pos["entry_price"] * 100
+            emoji = "🟢" if unrealized >= 0 else "🔴"
+            lines.append(
+                f"  {emoji} {pos['name']}: {pos['entry_price']:,}→{cur:,.0f}원 "
+                f"({unrealized_pct:+.2f}%, 평가손익 {unrealized:+,.0f}원)"
+            )
+        est_total = p["cash"] + sum(
+            pos["shares"] * (get_current_price_fn(c) or pos["entry_price"])
+            for c, pos in p["positions"].items()
+        )
+        lines.append(f"\n평가 총자산(추정): {est_total:,.0f}원")
+    else:
+        lines.append("\n현재 보유 중인 포지션 없음")
+
+    todays = [h for h in p["history"] if h["date"] == today]
+    if todays:
+        wins = sum(1 for h in todays if h["pnl"] > 0)
+        total_pnl = sum(h["pnl"] for h in todays)
+        lines.append(f"\n<b>오늘 청산 거래 ({len(todays)}건, 승 {wins})</b>")
+        for h in todays:
+            emoji = "🟢" if h["pnl"] >= 0 else "🔴"
+            lines.append(f"  {emoji} {h['name']}: {h['pnl']:+,}원 ({h['pnl_pct']:+.2f}%) - {h['reason']}")
+        lines.append(f"오늘 실현손익: {total_pnl:+,}원")
+    else:
+        lines.append("\n오늘 청산된 거래 없음")
+
+    total_trades = len(p["history"])
+    if total_trades:
+        total_wins = sum(1 for h in p["history"] if h["pnl"] > 0)
+        total_pnl_all = sum(h["pnl"] for h in p["history"])
+        lines.append(
+            f"\n<b>누적 (첫날부터)</b>\n"
+            f"총 거래 {total_trades}건, 승률 {total_wins/total_trades*100:.0f}%, "
+            f"누적손익 {total_pnl_all:+,}원"
+        )
+
+    return "\n".join(lines)
