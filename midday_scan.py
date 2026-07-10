@@ -27,6 +27,9 @@ TARGET_N = 10  # 목표 개수(가이드용) - 이보다 많으면 있는 만큼
 MAX_WORKERS = 15
 
 
+MIDDAY_MARKER_FILE = "midday_marker.json"
+
+
 def now_kst() -> datetime:
     return datetime.now(KST)
 
@@ -35,9 +38,17 @@ def is_weekday() -> bool:
     return now_kst().weekday() < 5
 
 
+def already_ran_today() -> bool:
+    marker = common.load_json(MIDDAY_MARKER_FILE, None)
+    return bool(marker) and marker.get("date") == now_kst().strftime("%Y-%m-%d")
+
+
 def main():
     if not is_weekday():
         print("주말이므로 건너뜁니다.")
+        return
+    if already_ran_today():
+        print(f"오늘({now_kst().strftime('%Y-%m-%d')}) 이미 오후 재점검이 완료되어 건너뜁니다 (백업 트리거 중복실행 방지).")
         return
 
     data = common.load_json(CANDIDATES_FILE, None)
@@ -97,6 +108,7 @@ def main():
     print("[2/2] 뉴스 재수집 + AI 재판단 중...")
     ai_picks = []
     all_reviewed = []
+    ai_failures = 0
     for conf, c, ev, tp in picks:
         news = ai_judge.fetch_news(c["name"])
         fundamentals = ai_judge.fetch_fundamentals(c["code"])
@@ -104,7 +116,7 @@ def main():
         ai = ai_judge.ai_analyze(c["code"], c["name"], ev, tp, news,
                                   fundamentals, earnings_news, market_sentiment)
         if ai is None:
-            ai_picks.append({"mode": "rule", "conf": conf, "c": c, "ev": ev, "tp": tp})
+            ai_failures += 1
             continue
         print(f"  {c['name']}: AI={ai['decision']} (신뢰도 {ai['confidence']}%)")
         all_reviewed.append({"c": c, "ev": ev, "ai": ai, "news": news})
@@ -117,9 +129,19 @@ def main():
             ai_picks.append({"mode": "ai", "conf": ai["confidence"], "c": c, "ev": ev,
                               "tp": tp, "ai": ai, "news": news, "rank": rs})
 
-    for p in ai_picks:
-        if p["mode"] == "rule" and "rank" not in p:
-            p["rank"] = common.rank_score(p["ev"]["confidence"] * 100, p["tp"]["entry"], p["tp"]["target"])
+    if ai_failures:
+        print(f"\n[경고] AI 판단 실패 {ai_failures}/{len(picks)}건")
+    if picks and ai_failures == len(picks):
+        common.send_telegram(
+            "⚠️ [시스템 경고] 오후 재점검에서 AI 판단이 전부 실패했습니다. "
+            "ANTHROPIC_API_KEY/결제 상태를 확인해주세요."
+        )
+        print("\n[완료] AI 전체 실패로 종료")
+        return
+    elif picks and ai_failures / len(picks) >= 0.5:
+        common.send_telegram(
+            f"⚠️ [시스템 경고] 오후 재점검 AI 판단 중 {ai_failures}/{len(picks)}건 실패 (API 상태 확인 권장)."
+        )
 
     ai_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
     final_picks = ai_picks  # 개수 상한 없음
@@ -159,6 +181,7 @@ def main():
                 "📋 [오후 재점검] 오전장 흐름을 반영해도 1차 조건을 만족한 종목이 없습니다."
             )
         print("\n[완료] 확정 신호 없음")
+        common.save_json(MIDDAY_MARKER_FILE, {"date": now_kst().strftime("%Y-%m-%d")})
         return
 
     for rank_no, p in enumerate(final_picks, 1):
@@ -173,6 +196,7 @@ def main():
         common.send_telegram(msg)
 
     print(f"\n[완료] {len(final_picks)}건 발송")
+    common.save_json(MIDDAY_MARKER_FILE, {"date": now_kst().strftime("%Y-%m-%d")})
 
 
 if __name__ == "__main__":

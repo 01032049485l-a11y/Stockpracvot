@@ -17,12 +17,20 @@ import paper_trading as pt
 KST = ZoneInfo("Asia/Seoul")
 
 
+EOD_MARKER_FILE = "eod_marker.json"
+
+
 def now_kst() -> datetime:
     return datetime.now(KST)
 
 
 def is_weekday() -> bool:
     return now_kst().weekday() < 5
+
+
+def report_already_sent_today() -> bool:
+    marker = common.load_json(EOD_MARKER_FILE, None)
+    return bool(marker) and marker.get("date") == now_kst().strftime("%Y-%m-%d")
 
 
 def get_current_price(code: str, today_compact: str) -> float | None:
@@ -64,9 +72,14 @@ def main():
 
     pt.save_portfolio(portfolio)
 
+    if report_already_sent_today():
+        print("오늘 결산 리포트는 이미 발송됨 (백업 트리거 중복방지, 청산 점검만 수행함).")
+        return
+
     report = pt.format_daily_report(portfolio, pt.today_str())
     common.send_telegram(report)
     print("\n" + report)
+    common.save_json(EOD_MARKER_FILE, {"date": now_kst().strftime("%Y-%m-%d")})
 
 
 if __name__ == "__main__":

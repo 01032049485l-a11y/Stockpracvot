@@ -109,8 +109,19 @@ def fetch_history(code: str, start: str) -> pd.DataFrame | None:
     return df
 
 
+def already_ran_today(now: datetime) -> bool:
+    existing = common.load_json(CANDIDATES_FILE, None)
+    if not existing:
+        return False
+    gen_at = existing.get("generated_at", "")
+    return gen_at[:10] == now.strftime("%Y-%m-%d")
+
+
 def main():
     now = datetime.now(KST)
+    if already_ran_today(now):
+        print(f"오늘({now.strftime('%Y-%m-%d')}) 이미 스캔이 완료되어 건너뜁니다 (백업 트리거 중복실행 방지).")
+        return
     start = (now - timedelta(days=200)).strftime("%Y-%m-%d")
 
     print("[1/2] 종목 리스트 조회 중...")
@@ -217,6 +228,7 @@ def main():
     print(f"\n[AI 검토] 규칙기반 후보 {len(picks)}개에 대해 뉴스/재무/실적 수집 + AI 판단 중...")
     ai_picks = []
     all_reviewed = []  # PASS 포함 전체 AI 검토 결과 (확정 픽이 0개일 때 근접 관찰종목 후보로 사용)
+    ai_failures = 0
     for conf, c, ev, tp in picks:
         news = ai_judge.fetch_news(c["name"])
         fundamentals = ai_judge.fetch_fundamentals(c["code"])
@@ -224,8 +236,9 @@ def main():
         ai = ai_judge.ai_analyze(c["code"], c["name"], ev, tp, news,
                                   fundamentals, earnings_news, market_sentiment)
         if ai is None:
-            # AI 판단 불가 시 규칙기반 결과로 대체(폴백)
-            ai_picks.append({"mode": "rule", "conf": conf, "c": c, "ev": ev, "tp": tp})
+            # AI 판단 실패 -> 더 이상 규칙기반으로 자동승인하지 않음 (뉴스/재무 검증 없이
+            # 기술지표만으로 신호를 내보내는 것은 정확도를 떨어뜨리므로 그냥 제외한다)
+            ai_failures += 1
             continue
         print(f"  {c['name']}: AI={ai['decision']} (신뢰도 {ai['confidence']}%)")
         all_reviewed.append({"c": c, "ev": ev, "ai": ai, "news": news})
@@ -238,10 +251,21 @@ def main():
             ai_picks.append({"mode": "ai", "conf": ai["confidence"], "c": c, "ev": ev,
                               "tp": tp, "ai": ai, "news": news, "rank": rs})
 
-    # 규칙기반 폴백 항목도 동일한 기준으로 종합점수 계산
-    for p in ai_picks:
-        if p["mode"] == "rule" and "rank" not in p:
-            p["rank"] = common.rank_score(p["ev"]["confidence"] * 100, p["tp"]["entry"], p["tp"]["target"])
+    if ai_failures:
+        print(f"\n[경고] AI 판단 실패 {ai_failures}/{len(picks)}건 (API 키/결제/네트워크 확인 필요)")
+    if picks and ai_failures == len(picks):
+        common.send_telegram(
+            "⚠️ [시스템 경고] 오늘 AI 판단이 전부 실패했습니다.\n"
+            f"기술적 후보는 {len(picks)}개 있었지만 뉴스/재무 검증 없이는 신호를 보내지 않습니다.\n"
+            "ANTHROPIC_API_KEY 또는 결제 상태를 확인해주세요."
+        )
+        common.save_json("today_picks.json", {"date": now.strftime("%Y-%m-%d"), "picks": []})
+        return
+    elif picks and ai_failures / len(picks) >= 0.5:
+        common.send_telegram(
+            f"⚠️ [시스템 경고] 오늘 AI 판단 중 {ai_failures}/{len(picks)}건이 실패했습니다. "
+            "일부 신호가 누락됐을 수 있습니다 (API 상태 확인 권장)."
+        )
 
     ai_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
     final_picks = ai_picks  # 개수 상한 없음: AI가 승인한 만큼(목표 약 10개, 많으면 더/적으면 덜)

@@ -66,7 +66,7 @@ def main():
     if alerted.get("_date") != today:
         alerted = {"_date": today}
 
-    n_checked, n_alerted = 0, 0
+    n_checked, n_alerted, ai_failures = 0, 0, 0
     for c in data["candidates"]:
         code, name = c["code"], c["name"]
 
@@ -118,22 +118,23 @@ def main():
         ai = ai_judge.ai_analyze(code, name, ev, tp, news,
                                   fundamentals, earnings_news, market_sentiment)
 
-        if ai is not None and ai["decision"] != "BUY":
+        if ai is None:
+            print(f"  [AI 실패] {name}({code}) - 뉴스/재무 검증 없이는 신호를 보내지 않습니다.")
+            ai_failures += 1
+            continue
+
+        if ai["decision"] != "BUY":
             print(f"  [AI 반려] {name}({code}) - {ai.get('summary','')[:60]}")
             alerted[key] = now_kst().isoformat()  # 같은 신호 반복 재검토 방지
             continue
 
-        if ai is not None:
-            ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
-            if ai["target_price"] <= ev["close"] or not common.meets_min_return(ai_tp_check):
-                print(f"  [제외] {name}({code}) - AI 목표가가 비정상이거나 기대수익 기준 미달")
-                alerted[key] = now_kst().isoformat()
-                continue
-            rs = common.rank_score(ai["confidence"], ev["close"], ai["target_price"])
-            msg = ai_judge.format_ai_alert(code, name, ev, ai, news, rs)
-        else:
-            rs = common.rank_score(ev["confidence"] * 100, tp["entry"], tp["target"])
-            msg = common.format_alert(code, name, ev, tp, rs)  # AI 판단 불가 시 규칙기반으로 대체
+        ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
+        if ai["target_price"] <= ev["close"] or not common.meets_min_return(ai_tp_check):
+            print(f"  [제외] {name}({code}) - AI 목표가가 비정상이거나 기대수익 기준 미달")
+            alerted[key] = now_kst().isoformat()
+            continue
+        rs = common.rank_score(ai["confidence"], ev["close"], ai["target_price"])
+        msg = ai_judge.format_ai_alert(code, name, ev, ai, news, rs)
 
         common.send_telegram(msg)
         alerted[key] = now_kst().isoformat()
@@ -141,7 +142,13 @@ def main():
         print(f"  [알림 발송] {name}({code}) BUY (기술적 신뢰도 {ev['confidence']*100:.0f}%)")
 
     common.save_json(ALERTED_FILE, alerted)
-    print(f"\n체크 완료: {n_checked}개 후보 확인, {n_alerted}건 신규 알림 발송")
+    print(f"\n체크 완료: {n_checked}개 후보 확인, {n_alerted}건 신규 알림 발송, AI실패 {ai_failures}건")
+    if n_checked and ai_failures / n_checked >= 0.5 and not alerted.get("_ai_warning_sent"):
+        common.send_telegram(
+            f"⚠️ [시스템 경고] 장중 AI 판단 중 {ai_failures}/{n_checked}건 실패. API 상태 확인 권장."
+        )
+        alerted["_ai_warning_sent"] = True
+        common.save_json(ALERTED_FILE, alerted)
 
 
 if __name__ == "__main__":
