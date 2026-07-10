@@ -1,0 +1,34 @@
+name: Telegram Command Listener
+
+on:
+  schedule:
+    # 매일(주말 포함) 한국시간 07:00~23:00, 3분 간격으로 새 텔레그램 메시지 확인
+    - cron: '*/3 22-23,0-14 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  listen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: pip install finance-datareader pandas numpy requests
+      - name: Check telegram commands
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python telegram_command.py
+      - name: Commit offset
+        run: |
+          git config user.name "stockbot"
+          git config user.email "stockbot@users.noreply.github.com"
+          git add telegram_offset.json || true
+          git commit -m "telegram offset update" || echo "no changes"
+          git push || true
