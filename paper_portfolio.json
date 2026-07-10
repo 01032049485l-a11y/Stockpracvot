@@ -1,0 +1,54 @@
+{
+  "cash": 57640.0,
+  "positions": {
+    "082210": {
+      "name": "옵트론텍",
+      "shares": 712,
+      "entry_price": 1755.0,
+      "stop_price": 1600,
+      "target_price": 2150,
+      "target_days": 3,
+      "entry_time": "2026-07-10T13:41:48.785924+09:00",
+      "last_ai_check_price": 1755.0,
+      "last_ai_check_time": "2026-07-10T13:41:48.785937+09:00",
+      "date": "2026-07-10"
+    },
+    "061090": {
+      "name": "세나테크놀로지",
+      "shares": 28,
+      "entry_price": 43200.0,
+      "stop_price": 40912,
+      "target_price": 49500,
+      "target_days": 2,
+      "entry_time": "2026-07-10T13:41:50.017192+09:00",
+      "last_ai_check_price": 43200.0,
+      "last_ai_check_time": "2026-07-10T13:41:50.017206+09:00",
+      "date": "2026-07-10"
+    },
+    "267980": {
+      "name": "매일유업",
+      "shares": 37,
+      "entry_price": 33400.0,
+      "stop_price": 33850,
+      "target_price": 37000,
+      "target_days": 2,
+      "entry_time": "2026-07-10T13:41:51.908296+09:00",
+      "last_ai_check_price": 33400.0,
+      "last_ai_check_time": "2026-07-10T13:41:51.908314+09:00",
+      "date": "2026-07-10"
+    },
+    "014710": {
+      "name": "사조씨푸드",
+      "shares": 140,
+      "entry_price": 8910.0,
+      "stop_price": 8556,
+      "target_price": 9850,
+      "target_days": 2,
+      "entry_time": "2026-07-10T13:41:53.764704+09:00",
+      "last_ai_check_price": 8910.0,
+      "last_ai_check_time": "2026-07-10T13:41:53.764717+09:00",
+      "date": "2026-07-10"
+    }
+  },
+  "history": []
+}
