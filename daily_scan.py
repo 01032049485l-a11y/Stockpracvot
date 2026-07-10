@@ -111,10 +111,13 @@ def fetch_history(code: str, start: str) -> pd.DataFrame | None:
 
 def already_ran_today(now: datetime) -> bool:
     existing = common.load_json(CANDIDATES_FILE, None)
-    if not existing:
-        return False
+    picks_file = common.load_json("today_picks.json", None)
+    if not existing or not picks_file:
+        return False  # 둘 중 하나라도 없으면(과거 버전 실행분 등) 다시 완전히 실행
     gen_at = existing.get("generated_at", "")
-    return gen_at[:10] == now.strftime("%Y-%m-%d")
+    picks_date = picks_file.get("date", "")
+    today_str = now.strftime("%Y-%m-%d")
+    return gen_at[:10] == today_str and picks_date == today_str
 
 
 def main():
