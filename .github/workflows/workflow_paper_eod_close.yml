@@ -30,6 +30,7 @@ jobs:
         run: |
           git config user.name "stockbot"
           git config user.email "stockbot@users.noreply.github.com"
-          git add paper_portfolio.json eod_marker.json || true
+          git add paper_portfolio.json || true
+          git add eod_marker.json || true
           git commit -m "paper eod close $(date +%F)" || echo "no changes"
           git push || true
