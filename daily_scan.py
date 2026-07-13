@@ -274,10 +274,10 @@ def main():
     ai_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
     final_picks = ai_picks  # 개수 상한 없음: AI가 승인한 만큼(목표 약 10개, 많으면 더/적으면 덜)
 
-    # 최소 보장: 확정 승인이 MIN_DAILY_PICKS(3)개 미만이면, PASS 판정을 받았더라도
+    # 최소 보장: 확정 승인이 MIN_DAILY_PICKS(5)개 미만이면, PASS 판정을 받았더라도
     # 그중 AI 신뢰도가 가장 높았던 근접 종목을 '승격 신호'로 채워 넣는다.
     # (모의매매가 매일 최소한의 데이터를 쌓을 수 있도록. 단, 완전승인과는 명확히 구분 표시)
-    MIN_DAILY_PICKS = 3
+    MIN_DAILY_PICKS = 5
     if len(final_picks) < MIN_DAILY_PICKS and all_reviewed:
         picked_codes = {p["c"]["code"] for p in final_picks}
         fillers = [w for w in all_reviewed if w["c"]["code"] not in picked_codes]

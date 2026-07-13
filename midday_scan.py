@@ -151,7 +151,7 @@ def main():
     ai_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
     final_picks = ai_picks  # 개수 상한 없음
 
-    MIN_DAILY_PICKS = 3
+    MIN_DAILY_PICKS = 5
     if len(final_picks) < MIN_DAILY_PICKS and all_reviewed:
         picked_codes = {p["c"]["code"] for p in final_picks}
         fillers = [w for w in all_reviewed if w["c"]["code"] not in picked_codes]
