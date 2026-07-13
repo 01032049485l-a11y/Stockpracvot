@@ -141,7 +141,8 @@ def fetch_investor_flow(code: str, days: int = 5) -> dict:
 
 def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list,
                    fundamentals: dict = None, earnings_news: list = None,
-                   market_sentiment: dict = None, investor_flow: dict = None) -> str:
+                   market_sentiment: dict = None, investor_flow: dict = None,
+                   performance_feedback: dict = None) -> str:
     fundamentals = fundamentals or {}
     earnings_news = earnings_news or []
     news_block = "\n".join(f"- {n['title']} ({n['date']})" for n in news) if news else "(관련 뉴스 없음)"
@@ -170,6 +171,17 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list,
     else:
         sentiment_block = "[시장 전체 심리] 산출 안 됨\n"
 
+    if performance_feedback and performance_feedback.get("trades", 0) > 0:
+        pf = performance_feedback
+        perf_block = (
+            f"[참고: 최근 실전 모의매매 성적] 최근 {pf['trades']}건 중 승 {pf['wins']}건 "
+            f"(승률 {pf['win_rate']:.0f}%), 평균 수익률 {pf['avg_pnl_pct']:+.2f}%\n"
+            f"(표본이 적으면 통계적으로 유의미하지 않을 수 있으니 참고만 하되, "
+            f"승률이 낮다면 평소보다 더 보수적으로 판단하세요)\n"
+        )
+    else:
+        perf_block = ""
+
     return f"""당신은 30년 경력의 월스트리트 트레이더 출신 전문 애널리스트입니다.
 워런 버핏이 조언을 구할 정도로 이 분야에 정통하며, 뉴스 헤드라인이나 단순 차트 패턴에
 휩쓸리지 않고 실적, 밸류에이션, 거시 환경, 시장 전체 심리까지 종합해서 냉정하게
@@ -186,6 +198,15 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list,
 반대로 시장이 과도한 공포로 짓눌려 있는데 이 종목만 개별 호재로 반등하는
 그림이면, 그 근거가 확실할 때 오히려 확신 있게 BUY 할 수 있습니다.
 
+이 시스템은 실제(가상)자금으로 자동 매매를 실행합니다. BUY는 "괜찮아 보인다" 정도가
+아니라 "이 정도면 진짜 산다"는 확신이 설 때만 내리는 결정입니다. 애매하면 PASS가
+기본값입니다. confidence는 정직하게 매기세요 — 특별한 확신이 없는데 습관적으로
+70~80%대를 주지 마세요. 다음 절차를 반드시 따르세요:
+  1) 먼저 이 종목을 사면 안 되는 이유(약세 시나리오, 리스크)를 스스로 최대한 찾아보세요
+  2) 그 반박에도 불구하고 강세 근거가 명백히 우세한 경우에만 BUY로 판단하세요
+  3) 반박이 그럴듯하게 남아있다면 PASS 하세요 (기술적 신호가 아무리 좋아도)
+
+{perf_block}
 [종목] {name} ({code})
 [현재가] {ev['close']:,.0f}원
 [밸류에이션] PER {per}배 / PBR {pbr}배
@@ -236,14 +257,16 @@ def _build_prompt(code: str, name: str, ev: dict, tp: dict, news: list,
 
 def ai_analyze(code: str, name: str, ev: dict, tp: dict, news: list,
                 fundamentals: dict = None, earnings_news: list = None,
-                market_sentiment: dict = None, investor_flow: dict = None) -> dict | None:
+                market_sentiment: dict = None, investor_flow: dict = None,
+                performance_feedback: dict = None) -> dict | None:
     """Claude API 호출. 실패하거나 파싱 안 되면 None 반환 (호출부에서 스킵 처리)."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         print("  [경고] ANTHROPIC_API_KEY가 없어 AI 판단을 건너뜁니다.")
         return None
 
-    prompt = _build_prompt(code, name, ev, tp, news, fundamentals, earnings_news, market_sentiment, investor_flow)
+    prompt = _build_prompt(code, name, ev, tp, news, fundamentals, earnings_news,
+                            market_sentiment, investor_flow, performance_feedback)
     headers = {
         "x-api-key": api_key,
         "anthropic-version": "2023-06-01",

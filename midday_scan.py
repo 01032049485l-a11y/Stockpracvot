@@ -24,6 +24,7 @@ CANDIDATES_FILE = "candidates.json"
 MIN_CONFIDENCE = 0.70
 AI_REVIEW_MAX = 25
 TARGET_N = 10  # 목표 개수(가이드용) - 이보다 많으면 있는 만큼 다 보내고, 적으면 적은 대로 보냄
+MIN_AI_ALERT_CONFIDENCE = 75  # AI 자신의 확신도가 이 이상일 때만 정식 매수신호로 알림
 MAX_WORKERS = 15
 
 
@@ -122,6 +123,9 @@ def main():
         print(f"  {c['name']}: AI={ai['decision']} (신뢰도 {ai['confidence']}%)")
         all_reviewed.append({"c": c, "ev": ev, "ai": ai, "news": news})
         if ai["decision"] == "BUY":
+            if ai["confidence"] < MIN_AI_ALERT_CONFIDENCE:
+                print(f"    -> AI 신뢰도 {ai['confidence']}%가 기준({MIN_AI_ALERT_CONFIDENCE}%) 미달로 제외")
+                continue
             ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
             if ai["target_price"] <= ev["close"] or not common.meets_min_return(ai_tp_check):
                 print(f"    -> AI 목표가가 비정상이거나 기대수익 기준 미달로 제외 ({ai['target_price']:,}원)")

@@ -46,6 +46,7 @@ def is_morning_buy_window() -> bool:
 
 
 MIN_CONFIDENCE = 0.70
+MIN_AI_ALERT_CONFIDENCE = 75  # AI 자신의 확신도가 이 이상일 때만 정식 매수신호로 알림
 
 
 def main():
@@ -127,6 +128,11 @@ def main():
         if ai["decision"] != "BUY":
             print(f"  [AI 반려] {name}({code}) - {ai.get('summary','')[:60]}")
             alerted[key] = now_kst().isoformat()  # 같은 신호 반복 재검토 방지
+            continue
+
+        if ai["confidence"] < MIN_AI_ALERT_CONFIDENCE:
+            print(f"  [제외] {name}({code}) - AI 신뢰도 {ai['confidence']}%가 기준({MIN_AI_ALERT_CONFIDENCE}%) 미달")
+            alerted[key] = now_kst().isoformat()
             continue
 
         ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}

@@ -111,13 +111,10 @@ def fetch_history(code: str, start: str) -> pd.DataFrame | None:
 
 def already_ran_today(now: datetime) -> bool:
     existing = common.load_json(CANDIDATES_FILE, None)
-    picks_file = common.load_json("today_picks.json", None)
-    if not existing or not picks_file:
-        return False  # 둘 중 하나라도 없으면(과거 버전 실행분 등) 다시 완전히 실행
+    if not existing:
+        return False
     gen_at = existing.get("generated_at", "")
-    picks_date = picks_file.get("date", "")
-    today_str = now.strftime("%Y-%m-%d")
-    return gen_at[:10] == today_str and picks_date == today_str
+    return gen_at[:10] == now.strftime("%Y-%m-%d")
 
 
 def main():
@@ -211,6 +208,7 @@ def main():
     MIN_CONFIDENCE = 0.70
     AI_REVIEW_MAX = 25   # AI+뉴스 검토 대상 상한 (API 비용/시간 관리, 기존 15->25로 확대)
     TARGET_N = 10        # 목표 개수(가이드용) - 이보다 많으면 있는 만큼 다 보내고, 적으면 적은 대로 보냄
+    MIN_AI_ALERT_CONFIDENCE = 75  # AI 자신의 확신도가 이 이상일 때만 정식 매수신호로 알림 (정확도 개선)
     picks = []
     for c in candidates:
         if c["verdict"] != "BUY":
@@ -247,6 +245,9 @@ def main():
         print(f"  {c['name']}: AI={ai['decision']} (신뢰도 {ai['confidence']}%)")
         all_reviewed.append({"c": c, "ev": ev, "ai": ai, "news": news})
         if ai["decision"] == "BUY":
+            if ai["confidence"] < MIN_AI_ALERT_CONFIDENCE:
+                print(f"    -> AI 신뢰도 {ai['confidence']}%가 기준({MIN_AI_ALERT_CONFIDENCE}%) 미달로 제외")
+                continue
             ai_tp_check = {"entry": ev["close"], "target": ai["target_price"]}
             if ai["target_price"] <= ev["close"] or not common.meets_min_return(ai_tp_check):
                 print(f"    -> AI 목표가가 비정상이거나 기대수익 기준 미달로 제외 ({ai['target_price']:,}원)")
@@ -263,7 +264,6 @@ def main():
             f"기술적 후보는 {len(picks)}개 있었지만 뉴스/재무 검증 없이는 신호를 보내지 않습니다.\n"
             "ANTHROPIC_API_KEY 또는 결제 상태를 확인해주세요."
         )
-        common.save_json("today_picks.json", {"date": now.strftime("%Y-%m-%d"), "picks": []})
         return
     elif picks and ai_failures / len(picks) >= 0.5:
         common.send_telegram(
@@ -297,17 +297,6 @@ def main():
                                  "tp": promoted_tp, "ai": ai, "news": w["news"], "rank": rs})
         final_picks.sort(key=lambda x: x["rank"]["score"], reverse=True)
         print(f"[최소보장] 확정승인 부족으로 {min(needed, len(fillers))}개 근접종목을 승격신호로 추가")
-
-    # 모의매매용: 오늘 승인된 픽을 저장 (paper_buy.py가 실제 시가로 가상매수할 때 사용)
-    today_picks = [{
-        "code": p["c"]["code"], "name": p["c"]["name"],
-        "stop_price": p["tp"]["stop"],
-        "target_price": (p["ai"]["target_price"] if p["mode"] == "ai" else p["tp"]["target"]),
-        "target_days": (p["ai"]["target_days"] if p["mode"] in ("ai", "promoted") else 1),
-        "rank_score": p["rank"]["score"],
-        "promoted": p["mode"] == "promoted",
-    } for p in final_picks]
-    common.save_json("today_picks.json", {"date": now.strftime("%Y-%m-%d"), "picks": today_picks})
 
     if final_picks:
         for rank_no, p in enumerate(final_picks, 1):
